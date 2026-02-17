@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GreenOnion Accessibility Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; color: #333; }
+        h1 { color: #2c3e50; }
+        .card { border: 1px solid #eee; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .status { font-weight: bold; text-transform: uppercase; font-size: 0.9em; padding: 4px 8px; border-radius: 4px; display: inline-block; }
+        .status.pending { background: #f39c12; color: white; }
+        .status.processing { background: #3498db; color: white; }
+        .status.completed { background: #27ae60; color: white; }
+        .status.failed { background: #c0392b; color: white; }
+        .metric { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #f0f0f0; padding-bottom: 5px; }
+        .metric label { color: #7f8c8d; }
+        .metric value { font-weight: bold; }
+        pre { background: #f8f9fa; padding: 10px; overflow-x: auto; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>Accessibility Scan Report</h1>
+    
+    <div id="loading">Loading report...</div>
+    <div id="content" style="display:none;">
+        <div class="card">
+            <h2>Scan Status</h2>
+            <div class="metric">
+                <label>Domain:</label>
+                <span id="domain"></span>
+            </div>
+            <div class="metric">
+                <label>Status:</label>
+                <span id="status" class="status"></span>
+            </div>
+            <div class="metric">
+                <label>Scanned At:</label>
+                <span id="scannedAt"></span>
+            </div>
+            <div id="errorBox" style="display:none; color: red; margin-top: 10px;"></div>
+        </div>
+
+        <div id="resultsCard" class="card" style="display:none;">
+            <h2>Results</h2>
+            <div class="metric">
+                <label>Score:</label>
+                <span id="score"></span>
+            </div>
+            <div class="metric">
+                <label>Violations:</label>
+                <span id="violationCount"></span>
+            </div>
+            <h3>Raw Data</h3>
+            <pre id="rawResults"></pre>
+        </div>
+    </div>
+
+    <script>
+        // Use params from URL or default for demo
+        const urlParams = new URLSearchParams(window.location.search);
+        const clientId = urlParams.get('clientId');
+        
+        // Configuration - in real app, these would be injected or better managed
+        const SUPABASE_URL = 'https://zkqljbjtbcaqfkyfnwfz.supabase.co'; 
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprcWxqYmp0YmNhcWZreWZud2Z6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEyMzQyNzIsImV4cCI6MjA4NjgxMDI3Mn0.BzwL7VwvW8vDY0DIgyNsyAFRdLTUO1a3_Gr7V3MbtWk';
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        async function loadReport() {
+            if (!clientId) {
+                document.getElementById('loading').textContent = 'No Client ID provided in URL (?clientId=...)';
+                return;
+            }
+
+            try {
+                // Fetch latest scan for client
+                const { data, error } = await supabase
+                    .from('accessibility_scans')
+                    .select('*')
+                    .eq('client_id', clientId)
+                    .order('scanned_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (error) throw error;
+
+                if (!data) {
+                    document.getElementById('loading').textContent = 'No scan found for this client.';
+                    return;
+                }
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+
+                document.getElementById('domain').textContent = data.domain;
+                const statusEl = document.getElementById('status');
+                statusEl.textContent = data.status;
+                statusEl.className = 'status ' + data.status;
+                document.getElementById('scannedAt').textContent = new Date(data.scanned_at).toLocaleString();
+
+                if (data.status === 'failed') {
+                    const errorBox = document.getElementById('errorBox');
+                    errorBox.style.display = 'block';
+                    errorBox.textContent = data.error_message;
+                }
+
+                if (data.status === 'completed' && data.results) {
+                    document.getElementById('resultsCard').style.display = 'block';
+                    document.getElementById('score').textContent = data.results.score ?? 'N/A';
+                    
+                    // Simple count logic depending on structure
+                    const count = data.results.pages 
+                        ? data.results.pages.reduce((sum, p) => sum + (p.violations?.length || 0), 0)
+                        : (data.results.violations?.length || 0); // fallback if distinct structure
+                    
+                    document.getElementById('violationCount').textContent = count;
+                    document.getElementById('rawResults').textContent = JSON.stringify(data.results, null, 2);
+                }
+
+            } catch (err) {
+                document.getElementById('loading').textContent = 'Error loading report: ' + err.message;
+            }
+        }
+
+        loadReport();
+    </script>
+</body>
+</html>
