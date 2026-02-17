@@ -8,6 +8,39 @@ const DEFAULT_MAX_PAGES = 50;
 const SEVERITY_WEIGHTS = { critical: 10, serious: 5, moderate: 2, minor: 1 };
 const HTMLCS_CDN = 'https://squizlabs.github.io/HTML_CodeSniffer/build/HTMLCS.js';
 
+// --- Cookie-Banner Dismissal ---
+async function dismissCookieBanner(page) {
+  const selectors = [
+    '[id*="cookie"] button',
+    '[class*="cookie"] button',
+    '[class*="consent"] button',
+    '.cc-dismiss',
+    '.cc-btn.cc-allow',
+    'button[data-cookiefirst-action="accept"]',
+    '#accept-cookies',
+    '.cookie-accept',
+  ];
+
+  // Text-basierte Selektoren separat (Playwright :has-text)
+  const textSelectors = [
+    'button:has-text("Akzeptieren")',
+    'button:has-text("Accept")',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Accept all")',
+  ];
+
+  for (const selector of [...selectors, ...textSelectors]) {
+    try {
+      const btn = await page.$(selector);
+      if (btn && await btn.isVisible()) {
+        await btn.click();
+        await page.waitForTimeout(500);
+        return;
+      }
+    } catch { /* ignore */ }
+  }
+}
+
 // --- Sitemap Parser ---
 async function fetchSitemap(baseUrl) {
   const sitemapUrl = new URL('/sitemap.xml', baseUrl).href;
@@ -57,6 +90,7 @@ async function crawlLinks(page, baseUrl, maxPages) {
 
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await dismissCookieBanner(page);
       const links = await page.$$eval('a[href]', anchors =>
         anchors.map(a => a.href).filter(h => h.startsWith('http'))
       );
@@ -144,6 +178,7 @@ function loadUrlList(filePath, baseUrl) {
 async function scanPageAxe(page, url) {
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await dismissCookieBanner(page);
 
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])

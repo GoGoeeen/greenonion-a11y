@@ -1,19 +1,27 @@
 {
   "name": "greenonion-a11y",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "GreenOnion A11y Compliance Factory — WCAG 2.1 AA automated remediation",
   "type": "module",
   "scripts": {
-    "scan": "node scanner.js",
+    "scan": "tsx scripts/scan.ts",
+    "scan:local": "tsx scripts/scan.ts -- --local",
+    "scan:legacy": "node scanner.js",
     "report": "node report.js",
     "fix": "node wp-adapter.js",
     "batch": "node batch-scan.js"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.0",
+    "@supabase/supabase-js": "^2.49.0",
+    "dotenv": "^16.4.0",
     "pg": "^8.18.0",
     "playwright": "^1.49.0",
     "puppeteer": "^23.0.0",
     "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0"
   }
 }

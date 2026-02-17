@@ -1,0 +1,48 @@
+name: Accessibility Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to scan (ohne https://)'
+        required: true
+        type: string
+      client_id:
+        description: 'Supabase Client UUID'
+        required: true
+        type: string
+      scan_id:
+        description: 'Supabase Scan UUID'
+        required: true
+        type: string
+      max_pages:
+        description: 'Max pages to scan'
+        required: false
+        default: '5'
+        type: string
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - run: npx playwright install chromium --with-deps
+
+      - name: Run accessibility scan
+        run: |
+          npm run scan -- \
+            --domain=${{ inputs.domain }} \
+            --client-id=${{ inputs.client_id }} \
+            --scan-id=${{ inputs.scan_id }} \
+            --max-pages=${{ inputs.max_pages }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
