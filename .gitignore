@@ -1,0 +1,7 @@
+node_modules/
+.env
+scan_*.json
+remediation_*.json
+*.pdf
+.claude/
+.playwright-mcp/

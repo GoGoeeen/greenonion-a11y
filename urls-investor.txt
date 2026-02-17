@@ -1,0 +1,5 @@
+# Investorensicht - authentifizierte Seiten
+/profil.php?seite=portal
+/profil.php?seite=profil
+/profil.php?seite=selbst
+/profil.php?seite=investitionen

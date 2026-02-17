@@ -1,0 +1,26 @@
+# Raith Online-Investieren — Sitemap für A11y-Scan
+# Öffentliche Seiten
+/
+/investments
+/kontakt
+/impressum
+/datenschutz
+/nutzungsvereinbarung
+/freibetragsrechner
+
+# Login / Registrierung
+/login
+/registrierung
+
+# Nach Login: Portal-Bereich
+/app
+/overview.php
+/proj.php
+/info.php
+/page.php
+
+# Legacy-Pfade
+/index.php
+/login.php
+/registrier.php
+/passwort-vergessen.php

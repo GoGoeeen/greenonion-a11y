@@ -1,0 +1,5 @@
+# Vermittlersicht - authentifizierte Seiten
+/profil.php?seite=portal
+/profil.php?seite=tranchen
+/profil.php?seite=profil
+/profil.php?seite=settings
