@@ -12,12 +12,26 @@
  *   --output <dir>       Output-Ordner (default: ./reports)
  *   --max-pages <n>      Max Seiten pro Website (default: 5)
  *   --delay <seconds>    Pause zwischen Scans (default: 5)
+ *   --sort-by <spalte>   Nach Spalte sortieren (z.B. "Umsatz EUR")
+ *   --sort-dir <asc|desc> Sortierrichtung (default: asc)
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { scan } from './scanner.js';
 import { generateReport } from './report.js';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// Supabase Client Initialization
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+const supabase = (supabaseUrl && supabaseServiceKey)
+  ? createClient(supabaseUrl, supabaseServiceKey)
+  : null;
+
 
 // ---------------------------------------------------------------------------
 // CLI Argument Parser
@@ -145,6 +159,16 @@ function writeSummary(summaryPath, results) {
 }
 
 // ---------------------------------------------------------------------------
+// Deutsche Zahl parsen (z.B. "240.214.492,36" → 240214492.36)
+// ---------------------------------------------------------------------------
+function parseGermanNumber(str) {
+  if (!str || str.trim() === '') return null;
+  const cleaned = str.trim().replace(/\./g, '').replace(',', '.');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+// ---------------------------------------------------------------------------
 // Hilfsfunktion: Pause
 // ---------------------------------------------------------------------------
 function sleep(ms) {
@@ -152,11 +176,187 @@ function sleep(ms) {
 }
 
 // ---------------------------------------------------------------------------
+// Trigger API Scan
+// ---------------------------------------------------------------------------
+async function triggerAccessibilityScan(client) {
+  if (!supabase) {
+    console.error('Supabase credentials missing. Cannot trigger scan.');
+    return;
+  }
+
+  // Bedingung: Status pending UND enabled (hier simuliert)
+  // In einer echten App würde man das Client-Objekt prüfen.
+  // Für diesen Test nehmen wir an, wenn die Funktion aufgerufen wird, soll gescannt werden.
+
+  try {
+    const { data, error } = await supabase.functions.invoke('scan-accessibility', {
+      body: { clientId: client.id, domain: client.domain },
+    });
+
+    if (error) throw error;
+
+    console.log(`  [API] Scan triggered for ${client.domain}. Scan ID: ${data.scanId}`);
+    return data;
+  } catch (err) {
+    console.error(`  [API] Failed to trigger scan for ${client.domain}:`, err.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Worker Mode
+// ---------------------------------------------------------------------------
+async function runWorker() {
+  console.log('Starting Accessibility Scan Worker...');
+  console.log('Polling for pending scans...');
+
+  if (!supabase) {
+    console.error('Supabase credentials missing. Worker cannot start.');
+    process.exit(1);
+  }
+
+  while (true) {
+    try {
+      // 1. Fetch pending scan
+      const { data: scanJob, error } = await supabase
+        .from('accessibility_scans')
+        .select('*')
+        .eq('status', 'pending')
+        .limit(1)
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
+        console.error('Error fetching pinsted scan:', error.message);
+      }
+
+      if (scanJob) {
+        console.log(`\nProcessing scan job: ${scanJob.id} for ${scanJob.domain}`);
+
+        // Update status to processing
+        await supabase
+          .from('accessibility_scans')
+          .update({ status: 'processing' })
+          .eq('id', scanJob.id);
+
+        try {
+          // Normalize URL - add https:// if missing
+          let normalizedUrl = scanJob.domain.trim();
+          if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+            normalizedUrl = 'https://' + normalizedUrl;
+            console.log(`  Normalized URL: ${normalizedUrl}`);
+          }
+
+          // 2. Run Scanner
+          const result = await scan({ url: normalizedUrl, maxPages: 50 }); // Default max pages
+
+          // 3. Transform results to match existing database schema
+          // Count severity levels
+          let criticalCount = 0;
+          let seriousCount = 0;
+          let moderateCount = 0;
+          let minorCount = 0;
+
+          const allFindings = [];
+          for (const page of result.pages) {
+            for (const issue of page.issues) {
+              const nodeCount = issue.nodes?.length || 1;
+
+              // Count by severity
+              if (issue.severity === 'critical') criticalCount += nodeCount;
+              else if (issue.severity === 'serious') seriousCount += nodeCount;
+              else if (issue.severity === 'moderate') moderateCount += nodeCount;
+              else if (issue.severity === 'minor') minorCount += nodeCount;
+
+              // Add to findings array
+              allFindings.push({
+                rule: issue.rule || issue.id,
+                severity: issue.severity,
+                wcag: issue.wcag,
+                description: issue.description,
+                impact: issue.impact,
+                help: issue.help,
+                helpUrl: issue.helpUrl,
+                pageUrl: page.url,
+                nodeCount,
+                nodes: issue.nodes
+              });
+            }
+          }
+
+          // 4. Save results to database
+          const { error: updateError } = await supabase
+            .from('accessibility_scans')
+            .update({
+              status: 'completed',
+              scan_date: new Date().toISOString(),
+              pages_scanned: result.pagesScanned,
+              pages_scanned_urls: result.pages.map(p => p.url),
+              total_findings: result.totalIssues,
+              critical_count: criticalCount,
+              serious_count: seriousCount,
+              moderate_count: moderateCount,
+              minor_count: minorCount,
+              score: result.score,
+              findings: allFindings,
+              raw_scan_result: result,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', scanJob.id);
+
+          if (updateError) {
+            console.error(`Failed to update scan results:`, updateError.message);
+          } else {
+            console.log(`✅ Scan completed for ${scanJob.domain}`);
+          }
+
+        } catch (scanError) {
+          console.error(`❌ Scan failed for ${scanJob.domain}:`, scanError.message);
+
+          const { error: updateError } = await supabase
+            .from('accessibility_scans')
+            .update({
+              status: 'failed',
+              error_message: scanError.message,
+              scanned_at: new Date().toISOString()
+            })
+            .eq('id', scanJob.id);
+
+          if (updateError) {
+            console.error(`Failed to update error status:`, updateError.message);
+          } else {
+            console.log(`  Status set to 'failed' in database`);
+          }
+        }
+      } else {
+        // No jobs, wait a bit
+        // process.stdout.write('.');
+      }
+
+      await sleep(5000); // 5 seconds poll interval
+
+    } catch (err) {
+      console.error('Worker loop error:', err);
+      await sleep(5000);
+    }
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
+  // Check for worker mode first - it doesn't need a CSV file
+  const isWorker = args.worker || false;
+
+  if (isWorker) {
+    await runWorker();
+    return;
+  }
+
+  // For non-worker modes, CSV is required
   if (args._positional.length === 0) {
     console.log(`Usage: node batch-scan.js <input.csv> [Optionen]
 
@@ -167,9 +367,16 @@ Optionen:
   --output <dir>       Output-Ordner (default: ./reports)
   --max-pages <n>      Max Seiten pro Website (default: 5)
   --delay <seconds>    Pause zwischen Scans (default: 5)
+  --sort-by <spalte>   Nach CSV-Spalte sortieren (z.B. "Umsatz EUR")
+  --sort-dir <asc|desc> Sortierrichtung (default: asc)
+  --worker             Startet den Worker-Prozess (Polling)
+  --trigger-api        Nutzt die API statt lokalem Scan (für Batch-Mode)
+
 
 Beispiel:
-  node batch-scan.js searchresults.csv --output ./reports --max-pages 3 --delay 2`);
+  node batch-scan.js searchresults.csv --output ./reports --max-pages 3 --delay 2
+  node batch-scan.js searchresults.csv --sort-by "Umsatz EUR" --sort-dir asc
+  node batch-scan.js --worker`);
     process.exit(1);
   }
 
@@ -177,6 +384,10 @@ Beispiel:
   const outputDir = args.output || './reports';
   const maxPages = parseInt(args['max-pages']) || 5;
   const delaySec = parseInt(args.delay) || 5;
+  const sortBy = args['sort-by'] || null;
+
+  const sortDir = (args['sort-dir'] || 'asc').toLowerCase();
+  const useApi = args['trigger-api'] || false;
 
   if (!existsSync(csvPath)) {
     console.error(`CSV-Datei nicht gefunden: ${csvPath}`);
@@ -209,8 +420,29 @@ Beispiel:
       name: row[nameCol]?.trim(),
       website: normalizeUrl(row[websiteCol]),
       rawWebsite: row[websiteCol]?.trim(),
+      _row: row,
     }))
     .filter(c => c.name && c.website);
+
+  // Sortierung
+  if (sortBy) {
+    const sortCol = findColumn(headers, [sortBy]);
+    if (!sortCol) {
+      console.error(`  Fehler: Sortier-Spalte "${sortBy}" nicht gefunden.`);
+      console.error(`  Verfügbare Spalten: ${headers.join(', ')}`);
+      process.exit(1);
+    }
+    companies.sort((a, b) => {
+      const valA = parseGermanNumber(a._row[sortCol]);
+      const valB = parseGermanNumber(b._row[sortCol]);
+      // Firmen ohne Wert ans Ende
+      if (valA === null && valB === null) return 0;
+      if (valA === null) return 1;
+      if (valB === null) return -1;
+      return sortDir === 'desc' ? valB - valA : valA - valB;
+    });
+    console.log(`  Sortiert nach "${sortCol}" (${sortDir === 'desc' ? 'absteigend' : 'aufsteigend'})`);
+  }
 
   console.log(`  ${companies.length} Firmen mit gültiger Website\n`);
 
@@ -257,8 +489,19 @@ Beispiel:
     mkdirSync(companyDir, { recursive: true });
 
     try {
+      if (useApi) {
+        // Simulate a client object
+        const client = { id: '00000000-0000-0000-0000-000000000000', domain: company.website }; // Dummy UUID for now or standard one
+        // Note: In real setup, we should probably create the client in DB first if it doesn't exist
+        // For this demo, we just call the trigger
+        await triggerAccessibilityScan(client);
+        console.log('    -> Triggered via API');
+        continue; // Skip local processing
+      }
+
       // Scan durchführen
       const scanResult = await scan({ url: company.website, maxPages });
+
 
       // Scan-Ergebnis speichern
       const jsonPath = join(companyDir, 'scan-result.json');
