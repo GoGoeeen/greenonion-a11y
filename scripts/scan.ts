@@ -46,13 +46,19 @@ function parseArgs(argv: string[]): CliArgs {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        opts[key] = next;
-        i++;
+      const raw = arg.slice(2);
+      const eqIdx = raw.indexOf('=');
+      if (eqIdx !== -1) {
+        // --key=value Format
+        opts[raw.slice(0, eqIdx)] = raw.slice(eqIdx + 1);
       } else {
-        opts[key] = true;
+        const next = argv[i + 1];
+        if (next && !next.startsWith('--')) {
+          opts[raw] = next;
+          i++;
+        } else {
+          opts[raw] = true;
+        }
       }
     }
   }
