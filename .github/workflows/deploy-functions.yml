@@ -21,5 +21,7 @@ jobs:
         with:
           version: latest
 
-      - name: Deploy Function
-        run: supabase functions deploy scan-accessibility --project-ref $PROJECT_ID --no-verify-jwt
+      - name: Deploy Functions
+        run: |
+          supabase functions deploy scan-accessibility --project-ref $PROJECT_ID --no-verify-jwt
+          supabase functions deploy on-scan-inserted --project-ref $PROJECT_ID --no-verify-jwt
