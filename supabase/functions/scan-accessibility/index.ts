@@ -30,15 +30,23 @@ Deno.serve(async (req) => {
         domain: domain,
         status: 'pending',
         scanned_at: new Date().toISOString(),
-        results: {} // Initialize empty
+        results: {}
       })
-      .select()
+      .select('id')
       .single()
 
     if (error) throw error
 
+    // const data = { id: ... } is no longer needed because data is valid
+
+    // const data = { id: '00000000-0000-0000-0000-000000000000' } // Fake ID logic
+
+
+
+
     // --- Trigger GitHub Action ---
     const connectionToken = Deno.env.get('GITHUB_TOKEN')
+    let triggerDebug = 'Not attempted'
 
     if (connectionToken) {
       console.log(`Triggering GitHub Action for ${domain}...`)
@@ -66,11 +74,13 @@ Deno.serve(async (req) => {
 
       if (githubResponse.status === 204) {
         console.log('GitHub Action triggered successfully.')
+        triggerDebug = 'Success: Workflow triggered (204)'
         // Update status to 'queued' or leave as pending? 
         // Pending is fine, the action will set it to 'running'.
       } else {
         const errorText = await githubResponse.text()
         console.error('Failed to trigger GitHub Action:', errorText)
+        triggerDebug = `Failed: ${githubResponse.status} - ${errorText}`
         // Optional: Update DB to reflect trigger failure
         await supabase
           .from('accessibility_scans')
@@ -82,11 +92,17 @@ Deno.serve(async (req) => {
       }
     } else {
       console.warn('GITHUB_TOKEN not set. Skipping GitHub Action trigger.')
+      triggerDebug = 'Skipped: GITHUB_TOKEN environment variable is missing'
       // We don't fail the request, just log it, so local worker could still pick it up if running
     }
 
     return new Response(
-      JSON.stringify({ success: true, scanId: data.id }),
+      JSON.stringify({
+        success: true,
+        version: "v2-no-results",
+        scanId: data.id,
+        triggerDebug
+      }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,
@@ -95,7 +111,7 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
+      JSON.stringify({ success: false, error: error.message, version: "v2-no-results" }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 400,
