@@ -4,7 +4,10 @@
 DELETE FROM public.accessibility_scans
 WHERE client_id NOT IN (SELECT id FROM public.clients);
 
--- Now add the foreign key constraint
+-- Now add the foreign key constraint (idempotent)
+ALTER TABLE public.accessibility_scans
+DROP CONSTRAINT IF EXISTS accessibility_scans_client_id_fkey;
+
 ALTER TABLE public.accessibility_scans
 ADD CONSTRAINT accessibility_scans_client_id_fkey
 FOREIGN KEY (client_id)
