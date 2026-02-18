@@ -20,3 +20,11 @@ jobs:
         run: |
           supabase link --project-ref vghixeurkagwfohkvhzf
           echo "y" | supabase db push
+
+      - name: Set GITHUB_TOKEN as Supabase Secret
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT_FOR_SUPABASE }}
+        run: |
+          supabase secrets set GITHUB_TOKEN="$GH_PAT" --project-ref vghixeurkagwfohkvhzf
+          echo "✅ GITHUB_TOKEN set as Supabase secret"
