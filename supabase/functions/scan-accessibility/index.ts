@@ -37,6 +37,54 @@ Deno.serve(async (req) => {
 
     if (error) throw error
 
+    // --- Trigger GitHub Action ---
+    const connectionToken = Deno.env.get('GITHUB_TOKEN')
+
+    if (connectionToken) {
+      console.log(`Triggering GitHub Action for ${domain}...`)
+
+      const githubResponse = await fetch(
+        `https://api.github.com/repos/GoGoeeen/greenonion-a11y/actions/workflows/scan.yml/dispatches`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${connectionToken}`,
+            Accept: 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            ref: 'main',
+            inputs: {
+              domain: domain,
+              client_id: clientId,
+              scan_id: data.id, // ID from the newly created row
+              max_pages: '5',   // Default or pass from req.json()
+            },
+          }),
+        }
+      )
+
+      if (githubResponse.status === 204) {
+        console.log('GitHub Action triggered successfully.')
+        // Update status to 'queued' or leave as pending? 
+        // Pending is fine, the action will set it to 'running'.
+      } else {
+        const errorText = await githubResponse.text()
+        console.error('Failed to trigger GitHub Action:', errorText)
+        // Optional: Update DB to reflect trigger failure
+        await supabase
+          .from('accessibility_scans')
+          .update({
+            status: 'failed',
+            error_message: `GitHub Trigger Failed: ${githubResponse.status} ${errorText}`
+          })
+          .eq('id', data.id)
+      }
+    } else {
+      console.warn('GITHUB_TOKEN not set. Skipping GitHub Action trigger.')
+      // We don't fail the request, just log it, so local worker could still pick it up if running
+    }
+
     return new Response(
       JSON.stringify({ success: true, scanId: data.id }),
       {
@@ -50,11 +98,7 @@ Deno.serve(async (req) => {
       JSON.stringify({ success: false, error: error.message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400, // Return 400 for bad requests, but maybe 200 with error field as per user request if strict?
-        // User said: "Bei Fehler -> status: 'failed', error_message speichern, HTTP 200 zurückgeben (kein 500-Crash)" -> This applies to the SCANNER logic execution mostly, but for the API, if we fail to insert, we should probably return error.
-        // Wait, "Bei Fehler -> status: 'failed', error_message speichern" refers to the *scanner* execution usually.
-        // But let's look at the requirement: "Gibt { success: true, scanId } zurück. Bei Fehler -> status: 'failed', ... HTTP 200 zurückgeben".
-        // Use 200 OK even for errors if possible to avoid crashing the client.
+        status: 400,
       }
     )
   }

@@ -1,0 +1,62 @@
+name: Token Health Monitor
+
+on:
+  schedule:
+    # Jeden Montag um 08:00 UTC prüfen
+    - cron: '0 8 * * 1'
+  workflow_dispatch: # Manuell ausführbar
+
+jobs:
+  check-expiration:
+    name: Check GitHub Token Expiration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Token Validity & Expiration
+        env:
+          # ACHTUNG: Du musst diesen Token auch in GitHub als Secret anlegen!
+          # Name: GH_PAT_FOR_SUPABASE
+          GH_TOKEN: ${{ secrets.GH_PAT_FOR_SUPABASE }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Secret 'GH_PAT_FOR_SUPABASE' wurde nicht gefunden. Bitte in GitHub Settings -> Secrets hinterlegen."
+            exit 1
+          fi
+
+          echo "Prüfe Token-Gültigkeit..."
+          
+          # Wir holen nur den Header (-I) von der User-API
+          HEADERS=$(curl -sI -H "Authorization: token $GH_TOKEN" https://api.github.com/user)
+          
+          # 1. Prüfen ob Valid (HTTP 200)
+          STATUS=$(echo "$HEADERS" | grep -i "HTTP/" | awk '{print $2}')
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::CRITICAL: Token ist ungültig oder bereits abgelaufen! (Status: $STATUS)"
+            exit 1
+          fi
+
+          # 2. Expiration Date auslesen
+          # Header-Format: github-authentication-token-expiration: 2026-05-19 09:24:35 UTC
+          EXP_STR=$(echo "$HEADERS" | grep -i "github-authentication-token-expiration" | cut -d: -f2- | xargs)
+
+          if [ -z "$EXP_STR" ]; then
+            echo "::notice::Kein Ablaufdatum im Header gefunden. (Token läuft evtl. nie ab?)"
+            exit 0
+          fi
+
+          echo "Token läuft ab am: $EXP_STR"
+
+          # 3. Tage berechnen
+          EXP_TS=$(date -d "$EXP_STR" +%s)
+          NOW_TS=$(date +%s)
+          DIFF_SEC=$((EXP_TS - NOW_TS))
+          DAYS_LEFT=$((DIFF_SEC / 86400))
+
+          echo "Verbleibende Tage: $DAYS_LEFT"
+
+          # 4. Alarm schlagen, wenn < 14 Tage
+          if [ "$DAYS_LEFT" -lt 14 ]; then
+            echo "::error::WARNUNG: Dein GitHub Token läuft in $DAYS_LEFT Tagen ab! Bitte erneuern."
+            exit 1
+          else
+            echo "✅ Alles okay. Token ist noch $DAYS_LEFT Tage gültig."
+          fi
