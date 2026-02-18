@@ -22,4 +22,4 @@ jobs:
           version: latest
 
       - name: Deploy Function
-        run: supabase functions deploy scan-accessibility --project-ref $PROJECT_ID
+        run: supabase functions deploy scan-accessibility --project-ref $PROJECT_ID --no-verify-jwt
