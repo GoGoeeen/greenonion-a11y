@@ -39,6 +39,11 @@ interface CliArgs {
   [key: string]: string | boolean | undefined;
 }
 
+interface NormalizedDomain {
+  baseUrl: string;
+  host: string;
+}
+
 // --- CLI Argument Parser ---
 
 function parseArgs(argv: string[]): CliArgs {
@@ -65,11 +70,35 @@ function parseArgs(argv: string[]): CliArgs {
   return opts;
 }
 
+function normalizeDomain(input: string): NormalizedDomain {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error('Leere Domain uebergeben');
+  }
+
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withProtocol);
+  } catch {
+    throw new Error(`Ungueltige Domain: ${input}`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Ungueltiges Protokoll in Domain: ${parsed.protocol}`);
+  }
+
+  return {
+    baseUrl: `${parsed.protocol}//${parsed.host}`,
+    host: parsed.host,
+  };
+}
+
 // --- robots.txt Check ---
 
-async function checkRobotsTxt(domain: string): Promise<{ allowed: boolean; warning?: string }> {
+async function checkRobotsTxt(baseUrl: string): Promise<{ allowed: boolean; warning?: string }> {
   try {
-    const res = await fetch(`https://${domain}/robots.txt`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${baseUrl}/robots.txt`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return { allowed: true };
 
     const text = await res.text();
@@ -297,17 +326,27 @@ async function main() {
   const rawArgs = process.argv.slice(2).filter(a => a !== '--');
   const args = parseArgs(rawArgs);
 
-  const domain = args.domain;
+  const rawDomain = args.domain;
   const clientId = args['client-id'];
   const scanId = args['scan-id'];
   const maxPages = parseInt(args['max-pages'] || '5', 10);
   const isLocal = args.local === true;
 
-  if (!domain) {
+  if (!rawDomain) {
     console.error('Fehler: --domain ist erforderlich');
     console.error('Usage: tsx scripts/scan.ts --domain example.com [--client-id UUID] [--scan-id UUID] [--max-pages 5] [--local]');
     process.exit(1);
   }
+
+  let normalized: NormalizedDomain;
+  try {
+    normalized = normalizeDomain(rawDomain);
+  } catch (err) {
+    console.error(`Fehler: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  const targetUrl = normalized.baseUrl;
+  const domain = normalized.host;
 
   // Supabase init (nur wenn nicht --local)
   let supabase: SupabaseClient | null = null;
@@ -326,7 +365,7 @@ async function main() {
   }
 
   console.log(`\n  GreenOnion A11y Scanner — GitHub Actions Mode`);
-  console.log(`  Domain: ${domain}`);
+  console.log(`  Domain: ${targetUrl}`);
   console.log(`  Max Pages: ${maxPages}`);
   console.log(`  Mode: ${isLocal ? 'local' : 'supabase'}`);
   if (scanId) console.log(`  Scan ID: ${scanId}`);
@@ -345,7 +384,7 @@ async function main() {
 
   try {
     // robots.txt pruefen
-    const robotsCheck = await checkRobotsTxt(domain);
+    const robotsCheck = await checkRobotsTxt(targetUrl);
     let effectiveMaxPages = maxPages;
     let warningMessage: string | undefined;
 
@@ -357,7 +396,7 @@ async function main() {
 
     // Domain erreichbar?
     try {
-      const probe = await fetch(`https://${domain}`, {
+      const probe = await fetch(targetUrl, {
         method: 'HEAD',
         signal: AbortSignal.timeout(10000),
         redirect: 'follow',
@@ -366,7 +405,7 @@ async function main() {
         throw new Error(`Server antwortet mit Status ${probe.status}`);
       }
     } catch (err) {
-      const message = `Domain https://${domain} nicht erreichbar: ${(err as Error).message}`;
+      const message = `Domain ${targetUrl} nicht erreichbar: ${(err as Error).message}`;
       console.error(`  ${message}`);
       if (supabase && scanId) {
         await updateScanStatus(supabase, scanId, 'failed', message);
@@ -376,7 +415,7 @@ async function main() {
 
     // Scan ausfuehren (mit Timeout)
     const scanResult = await Promise.race([
-      scan({ url: `https://${domain}`, maxPages: effectiveMaxPages }) as Promise<RawScanResult>,
+      scan({ url: targetUrl, maxPages: effectiveMaxPages }) as Promise<RawScanResult>,
       timeoutPromise,
     ]);
 
@@ -393,7 +432,7 @@ async function main() {
     if (isLocal) {
       // Lokaler Modus: JSON-Datei speichern
       mkdirSync('output', { recursive: true });
-      const outputPath = `output/scan_${domain}_${Date.now()}.json`;
+      const outputPath = `output/scan_${domain.replace(/[^a-z0-9.-]/gi, '_')}_${Date.now()}.json`;
       const output = {
         domain,
         scan_date: new Date().toISOString(),
