@@ -43,13 +43,8 @@ async function dismissCookieBanner(page) {
 
 // --- Sitemap Parser ---
 async function fetchSitemap(baseUrl) {
-  const sitemapUrl = new URL('/sitemap.xml', baseUrl).href;
-  try {
-    const res = await fetch(sitemapUrl);
-    if (!res.ok) return [];
-    const xml = await res.text();
+  const extractUrlsFromSitemapXml = async (xml) => {
     const parsed = await parseStringPromise(xml);
-
     if (parsed.sitemapindex) {
       const sitemapUrls = parsed.sitemapindex.sitemap.map(s => s.loc[0]);
       const allUrls = [];
@@ -71,6 +66,35 @@ async function fetchSitemap(baseUrl) {
       return parsed.urlset.url.map(u => u.loc[0]);
     }
     return [];
+  };
+
+  const getSitemapUrlsFromRobots = async () => {
+    try {
+      const robotsUrl = new URL('/robots.txt', baseUrl).href;
+      const res = await fetch(robotsUrl);
+      if (!res.ok) return [];
+      const robots = await res.text();
+      // Capture "Sitemap: URL" even if the file has odd formatting on one line.
+      const matches = [...robots.matchAll(/sitemap:\s*(\S+)/gi)];
+      return matches.map(m => m[1]).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+
+  const sitemapUrl = new URL('/sitemap.xml', baseUrl).href;
+  const candidateSitemaps = [sitemapUrl, ...(await getSitemapUrlsFromRobots())];
+
+  try {
+    for (const smUrl of candidateSitemaps) {
+      const res = await fetch(smUrl);
+      if (!res.ok) continue;
+      const xml = await res.text();
+      const urls = await extractUrlsFromSitemapXml(xml);
+      if (urls.length > 0) return urls;
+    }
+
+    return [];
   } catch {
     return [];
   }
@@ -80,7 +104,7 @@ async function fetchSitemap(baseUrl) {
 async function crawlLinks(page, baseUrl, maxPages) {
   const visited = new Set();
   const queue = [baseUrl];
-  const origin = new URL(baseUrl).origin;
+  const baseHost = new URL(baseUrl).hostname.replace(/^www\./i, '');
 
   while (queue.length > 0 && visited.size < maxPages) {
     const url = queue.shift();
@@ -96,9 +120,13 @@ async function crawlLinks(page, baseUrl, maxPages) {
       );
       for (const link of links) {
         const clean = link.split('#')[0].split('?')[0];
-        if (clean.startsWith(origin) && !visited.has(clean)) {
-          queue.push(clean);
-        }
+        let isSameSite = false;
+        try {
+          const linkUrl = new URL(clean);
+          const linkHost = linkUrl.hostname.replace(/^www\./i, '');
+          isSameSite = linkHost === baseHost;
+        } catch { /* invalid URL */ }
+        if (isSameSite && !visited.has(clean)) queue.push(clean);
       }
     } catch { /* skip unreachable pages */ }
   }
