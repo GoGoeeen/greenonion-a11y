@@ -4,9 +4,15 @@ import type { ManualCheckDefinition } from './manual-checks.js';
 type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
 
 interface AgentNode {
+  url: string;
   selector: string;
   html: string;
   failureSummary: string;
+}
+
+interface AgentRemediation {
+  recommended_fix: string;
+  explanation: string;
 }
 
 interface AgentIssue {
@@ -19,6 +25,7 @@ interface AgentIssue {
   category: string;
   description: string;
   nodes: AgentNode[];
+  remediation?: AgentRemediation;
 }
 
 interface CandidateNode {
@@ -29,6 +36,40 @@ interface CandidateNode {
   selector: string;
   html: string;
   failureSummary: string;
+}
+
+interface ManualCheckEvidenceEntry {
+  id: string;
+  rule: string;
+  category: string;
+  wcag: string;
+  task: string;
+  status: 'Pass' | 'Fail' | 'Needs Human Review';
+  status_label: string;
+  description: string;
+  remediation?: AgentRemediation;
+  nodes: Array<{ url: string; selector: string; html: string }>;
+  agent_descriptions: string[];
+}
+
+interface CandidateIssue {
+  source: 'issues' | 'incomplete';
+  url: string;
+  rule: string;
+  description: string;
+  wcag_criteria: string[];
+  nodes: Array<{ selector: string; html: string; failureSummary: string }>;
+}
+
+interface CandidateProof {
+  id: string;
+  url: string;
+  rule: string;
+  wcag_criteria: string[];
+  selector: string;
+  html: string;
+  failureSummary: string;
+  source: 'issues' | 'incomplete';
 }
 
 function buildIssueJsonSchema(manualChecks: ManualCheckDefinition[]) {
@@ -64,17 +105,27 @@ function buildIssueJsonSchema(manualChecks: ManualCheckDefinition[]) {
                   engine: { type: 'string', const: 'llm-agent' },
                   severity: { type: 'string', enum: ['critical', 'serious', 'moderate', 'minor'] },
                   description: { type: 'string' },
+                  remediation: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      recommended_fix: { type: 'string' },
+                      explanation: { type: 'string' },
+                    },
+                    required: ['recommended_fix', 'explanation'],
+                  },
                   nodes: {
                     type: 'array',
                     items: {
                       type: 'object',
                       additionalProperties: false,
                       properties: {
+                        url: { type: 'string' },
                         selector: { type: 'string' },
                         html: { type: 'string' },
                         failureSummary: { type: 'string' },
                       },
-                      required: ['selector', 'html', 'failureSummary'],
+                      required: ['url', 'selector', 'html', 'failureSummary'],
                     },
                   },
                 },
@@ -104,10 +155,20 @@ function normalizeNode(input: unknown): AgentNode | null {
   if (!input || typeof input !== 'object') return null;
   const node = input as Record<string, unknown>;
   return {
+    url: toText(node.url),
     selector: toText(node.selector),
     html: toText(node.html),
     failureSummary: toText(node.failureSummary),
   };
+}
+
+function normalizeRemediation(input: unknown): AgentRemediation | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, unknown>;
+  const recommended_fix = toText(raw.recommended_fix).trim();
+  const explanation = toText(raw.explanation).trim();
+  if (!recommended_fix || !explanation) return undefined;
+  return { recommended_fix, explanation };
 }
 
 function wcagToTag(wcag: string): string {
@@ -131,6 +192,7 @@ function sanitizeIssues(
     const wcagCriteriaRaw = Array.isArray(raw.wcag_criteria) ? raw.wcag_criteria : [];
     const wcagRaw = toText(wcagCriteriaRaw[0]);
     const severityRaw = toText(raw.severity);
+    const remediation = normalizeRemediation(raw.remediation);
     const check = checksById.get(manualCheckId);
     if (!check) continue;
     if (check.category !== categoryRaw || check.wcag !== wcagRaw) continue;
@@ -142,7 +204,7 @@ function sanitizeIssues(
     if (!isSeverity(severityRaw) || nodes.length === 0) continue;
 
     const hasInvalidSource = nodes.some((node) => {
-      const source = sourceByNodeKey.get(`${node.selector}||${node.html}`);
+      const source = sourceByNodeKey.get(`${node.url}||${node.selector}||${node.html}`);
       if (!source) return true;
       return !check.appliesTo.includes(source);
     });
@@ -158,6 +220,7 @@ function sanitizeIssues(
       category: check.category,
       description: toText(raw.description) || 'LLM-basierte semantische Pruefung.',
       nodes,
+      remediation,
     });
   }
   return issues;
@@ -171,6 +234,230 @@ function extractIssuesArray(payload: unknown): unknown[] {
 
   const typedResults = evaluationResults as Record<string, unknown>;
   return Array.isArray(typedResults.issues) ? typedResults.issues : [];
+}
+
+function extractWcagCriteria(tags: string[]): string[] {
+  const criteria: string[] = [];
+  for (const tag of tags) {
+    const match = tag.match(/^wcag(\d)(\d)(\d+)$/);
+    if (match) criteria.push(`${match[1]}.${match[2]}.${match[3]}`);
+  }
+  return criteria;
+}
+
+function getIssueWcagCriteria(issue: Record<string, unknown>): string[] {
+  const fromTyped = Array.isArray(issue.wcag_criteria)
+    ? (issue.wcag_criteria as unknown[]).map((v) => toText(v).trim()).filter(Boolean)
+    : [];
+  if (fromTyped.length > 0) return fromTyped;
+
+  const fromTags = extractWcagCriteria(Array.isArray(issue.wcagTags) ? (issue.wcagTags as string[]) : []);
+  if (fromTags.length > 0) return fromTags;
+  const wcag = toText(issue.wcag).trim();
+  if (!wcag) return [];
+  return wcag.split('/').map((s) => s.trim()).filter(Boolean);
+}
+
+function collectAllIssues(rawResult: any): CandidateIssue[] {
+  const pages = Array.isArray(rawResult?.pages) ? rawResult.pages : [];
+  const all: CandidateIssue[] = [];
+
+  for (const page of pages) {
+    const pageUrl = toText(page?.url);
+    const fromIssues = Array.isArray(page?.issues) ? page.issues : [];
+    const fromIncomplete = Array.isArray(page?.incomplete) ? page.incomplete : [];
+
+    const pushIssue = (source: 'issues' | 'incomplete', issue: any) => {
+      if (!issue || typeof issue !== 'object') return;
+      const typed = issue as Record<string, unknown>;
+      const rule = toText(typed.rule).trim();
+      const description = toText(typed.description).trim() || toText(typed.help).trim();
+      const wcag_criteria = getIssueWcagCriteria(typed);
+      const rawNodes = Array.isArray(typed.nodes) ? typed.nodes : [];
+      const nodes = rawNodes
+        .map((node) => {
+          if (!node || typeof node !== 'object') return null;
+          const n = node as Record<string, unknown>;
+          const selector = toText(n.selector);
+          const html = toText(n.html); // keep placeholders like ##...## untouched
+          const failureSummary = toText(n.failureSummary);
+          if (!selector || !html) return null;
+          return { selector, html, failureSummary };
+        })
+        .filter((node): node is { selector: string; html: string; failureSummary: string } => node !== null);
+
+      all.push({
+        source,
+        url: pageUrl,
+        rule,
+        description,
+        wcag_criteria,
+        nodes,
+      });
+    };
+
+    for (const issue of fromIssues) pushIssue('issues', issue);
+    for (const issue of fromIncomplete) pushIssue('incomplete', issue);
+  }
+
+  return all;
+}
+
+// Filters candidates by WCAG and keeps a compact representative set.
+// Max 3 nodes per (rule,url) group.
+export function findRelevantCandidates(allIssues: CandidateIssue[], wcagId: string): CandidateProof[] {
+  const filtered = allIssues.filter((issue) => issue.wcag_criteria.includes(wcagId));
+  const groupCounts = new Map<string, number>();
+  const candidates: CandidateProof[] = [];
+  let counter = 1;
+
+  for (const issue of filtered) {
+    const groupKey = `${issue.rule}||${issue.url}`;
+    const current = groupCounts.get(groupKey) || 0;
+    if (current >= 3) continue;
+
+    for (const node of issue.nodes) {
+      const used = groupCounts.get(groupKey) || 0;
+      if (used >= 3) break;
+
+      candidates.push({
+        id: `${wcagId.replace(/\./g, '_')}_${counter++}`,
+        url: issue.url,
+        rule: issue.rule,
+        wcag_criteria: issue.wcag_criteria,
+        selector: node.selector,
+        html: node.html, // keep ##...## placeholders unchanged
+        failureSummary: node.failureSummary,
+        source: issue.source,
+      });
+
+      groupCounts.set(groupKey, used + 1);
+    }
+  }
+
+  return candidates;
+}
+
+function buildDecisionSchema(manualCheckId: string, candidateIds: string[]) {
+  return {
+    name: 'manual_check_decision',
+    strict: true,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        decision: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            manual_check_id: { type: 'string', enum: [manualCheckId] },
+            status: { type: 'string', enum: ['Pass', 'Fail', 'Needs Human Review'] },
+            explanation: { type: 'string' },
+            agent_descriptions: {
+              type: 'array',
+              items: { type: 'string' },
+            },
+            evidence_candidate_ids: {
+              type: 'array',
+              items: { type: 'string', enum: candidateIds },
+            },
+            remediation: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                recommended_fix: { type: 'string' },
+                explanation: { type: 'string' },
+              },
+              required: ['recommended_fix', 'explanation'],
+            },
+          },
+          required: ['manual_check_id', 'status', 'explanation', 'agent_descriptions', 'evidence_candidate_ids'],
+        },
+      },
+      required: ['decision'],
+    },
+  } as const;
+}
+
+async function evaluateManualCheckDecision(
+  client: OpenAI,
+  pageContext: { urls: string[]; titles: string[] },
+  check: ManualCheckDefinition,
+  candidates: CandidateProof[],
+): Promise<{
+  status: 'Pass' | 'Fail' | 'Needs Human Review';
+  explanation: string;
+  agent_descriptions: string[];
+  evidence_candidate_ids: string[];
+  remediation?: AgentRemediation;
+} | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.1,
+      response_format: {
+        type: 'json_schema',
+        json_schema: buildDecisionSchema(check.id, candidates.map((c) => c.id)),
+      },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Du bist ein Accessibility-Reviewer fuer semantische Checks.',
+            'Entscheide ausschliesslich anhand der uebergebenen Kandidaten: bestaetigen sie den Verdacht fuer den Check?',
+            'Du bist verpflichtet, zu jedem Fail oder Needs-Review-Status mindestens 1-3 konkrete Code-Beispiele (Nodes) aus dem Scan-Input mitzuliefern.',
+            'Nutze bei Bildern den Kontext aus check.task, URL, Seitentitel, issueDescription und HTML-Snippet fuer semantisch passende Alt-Texte.',
+            'Wenn du einen eindeutigen Verstoß (Fail) feststellst, der technisch loesbar ist (z.B. fehlende Alt-Texte, falsche ARIA-Attribute, fehlende Labels), generiere im Feld recommended_fix den fertigen Korrektur-Code.',
+            'WICHTIG: Bewahre Platzhalter wie ##...## exakt unveraendert im vorgeschlagenen HTML.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            check: {
+              id: check.id,
+              rule: check.rule,
+              wcag: check.wcag,
+              category: check.category,
+              task: check.task || check.label || check.rule,
+            },
+            pageContext,
+            candidates,
+          }),
+        },
+      ],
+    }, { signal: controller.signal });
+
+    const jsonString = extractJsonStringFromCompletion(completion);
+    if (!jsonString) return null;
+    const parsed = JSON.parse(jsonString) as Record<string, unknown>;
+    const decision = (parsed.decision || {}) as Record<string, unknown>;
+
+    const status = toText(decision.status) as 'Pass' | 'Fail' | 'Needs Human Review';
+    if (!['Pass', 'Fail', 'Needs Human Review'].includes(status)) return null;
+
+    const evidence_candidate_ids = Array.isArray(decision.evidence_candidate_ids)
+      ? decision.evidence_candidate_ids.map((id) => toText(id)).filter(Boolean)
+      : [];
+    const agent_descriptions = Array.isArray(decision.agent_descriptions)
+      ? decision.agent_descriptions.map((text) => toText(text)).filter(Boolean)
+      : [];
+
+    return {
+      status,
+      explanation: toText(decision.explanation) || 'Keine Erklaerung geliefert.',
+      agent_descriptions,
+      evidence_candidate_ids,
+      remediation: normalizeRemediation(decision.remediation),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extractJsonStringFromCompletion(completion: unknown): string | null {
@@ -202,13 +489,14 @@ function extractJsonStringFromCompletion(completion: unknown): string | null {
 async function evaluatePageNodes(
   client: OpenAI,
   pageUrl: string,
+  pageTitle: string,
   nodes: CandidateNode[],
   manualChecks: ManualCheckDefinition[],
 ): Promise<AgentIssue[] | null> {
   const payload = nodes.slice(0, 120);
   const sourceByNodeKey = new Map<string, CandidateNode['source']>();
   for (const node of payload) {
-    sourceByNodeKey.set(`${node.selector}||${node.html}`, node.source);
+    sourceByNodeKey.set(`${node.pageUrl}||${node.selector}||${node.html}`, node.source);
   }
   const manualChecksForPrompt = manualChecks.map((check) => ({
     id: check.id,
@@ -216,7 +504,7 @@ async function evaluatePageNodes(
     category: check.category,
     wcag_criteria: [check.wcag],
     appliesTo: check.appliesTo,
-    label: check.label,
+    task: check.task || check.label || check.rule,
   }));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25000);
@@ -240,6 +528,12 @@ async function evaluatePageNodes(
             'Setze engine immer auf "llm-agent".',
             'Ordne jedes Issue exakt einem manual_check_id aus manualChecks zu.',
             'category und wcag_criteria muessen exakt zum ausgewaehlten manual_check_id passen.',
+            'Jeder Node muss url, selector, html und failureSummary enthalten.',
+            'Uebernimm fuer url immer die betroffene Seiten-URL des Kandidaten.',
+            'Liefere pro Issue die kritischsten 1-3 Beispiel-Nodes, keine redundanten Duplikate.',
+            'Du bist verpflichtet, zu jedem Fail oder Needs-Review-Status mindestens 1-3 konkrete Code-Beispiele (Nodes) aus dem Scan-Input mitzuliefern.',
+            'Wenn du einen eindeutigen Verstoß (Fail) feststellst, der technisch loesbar ist (z.B. fehlende Alt-Texte, falsche ARIA-Attribute, fehlende Labels), generiere im Feld recommended_fix den fertigen Korrektur-Code.',
+            'Nutze bei Bildern den Kontext aus pageUrl, pageTitle, issueDescription und HTML-Snippet, um den semantisch passendsten Alt-Text vorzuschlagen.',
             'Pruefe source je Kandidat: source=suspicious-alt-text darf nur Checks mit appliesTo containing suspicious-alt-text nutzen.',
             'source=incomplete darf nur Checks mit appliesTo containing incomplete nutzen.',
           ].join(' '),
@@ -248,6 +542,7 @@ async function evaluatePageNodes(
           role: 'user',
           content: JSON.stringify({
             pageUrl,
+            pageTitle,
             task: 'Pruefe verdaechtige Alt-Texte und manuell zu pruefende Axe-Checks semantisch.',
             manualChecks: manualChecksForPrompt,
             candidates: payload,
@@ -289,65 +584,97 @@ export async function runAgentEvaluation(
   }
 
   const client = new OpenAI({ apiKey: openaiApiKey });
+  const allIssues = collectAllIssues(rawResult);
+  const pageContext = {
+    urls: Array.from(new Set(allIssues.map((issue) => issue.url).filter(Boolean))).slice(0, 20),
+    titles: (Array.isArray(rawResult?.pages) ? rawResult.pages : [])
+      .map((p: any) => toText(p?.title))
+      .filter(Boolean)
+      .slice(0, 20),
+  };
 
-  for (const page of rawResult.pages) {
-    try {
-      const pageIssues = Array.isArray(page?.issues) ? page.issues : [];
-      const pageIncomplete = Array.isArray(page?.incomplete) ? page.incomplete : [];
+  const results: ManualCheckEvidenceEntry[] = [];
 
-      const suspicious = pageIssues.filter(
-        (issue: any) => issue && issue.rule === 'suspicious-alt-text',
+  for (const check of manualChecks) {
+    const task = check.task || check.label || check.rule;
+    const wcagCandidates = findRelevantCandidates(allIssues, check.wcag);
+    const ruleCandidates = allIssues
+      .filter((issue) => issue.rule === check.rule)
+      .flatMap((issue) =>
+        issue.nodes.slice(0, 3).map((node, idx) => ({
+          id: `${check.id}_rule_${idx + 1}`,
+          url: issue.url,
+          rule: issue.rule,
+          wcag_criteria: issue.wcag_criteria,
+          selector: node.selector,
+          html: node.html,
+          failureSummary: node.failureSummary,
+          source: issue.source,
+        })),
       );
-
-      const candidateNodes: CandidateNode[] = [];
-
-      for (const issue of suspicious) {
-        const nodes = Array.isArray(issue?.nodes) ? issue.nodes : [];
-        for (const node of nodes) {
-          candidateNodes.push({
-            source: 'suspicious-alt-text',
-            pageUrl: toText(page?.url),
-            issueRule: toText(issue?.rule),
-            issueDescription: toText(issue?.description),
-            selector: toText(node?.selector),
-            html: toText(node?.html),
-            failureSummary: toText(node?.failureSummary),
-          });
-        }
-      }
-
-      for (const issue of pageIncomplete) {
-        const nodes = Array.isArray(issue?.nodes) ? issue.nodes : [];
-        for (const node of nodes) {
-          candidateNodes.push({
-            source: 'incomplete',
-            pageUrl: toText(page?.url),
-            issueRule: toText(issue?.rule),
-            issueDescription: toText(issue?.description),
-            selector: toText(node?.selector),
-            html: toText(node?.html),
-            failureSummary: toText(node?.failureSummary),
-          });
-        }
-      }
-
-      if (candidateNodes.length === 0) {
-        continue;
-      }
-
-      const llmIssues = await evaluatePageNodes(client, toText(page?.url), candidateNodes, manualChecks);
-      if (llmIssues === null) {
-        continue;
-      }
-
-      if (!Array.isArray(page.issues)) {
-        page.issues = [];
-      }
-      page.issues.push(...llmIssues);
-    } catch (err) {
-      console.warn(`LLM agent evaluation skipped for page "${toText(page?.url)}": ${(err as Error).message}`);
+    const candidateMap = new Map<string, CandidateProof>();
+    for (const cand of [...wcagCandidates, ...ruleCandidates]) {
+      const key = `${cand.url}||${cand.selector}||${cand.html}`;
+      if (!candidateMap.has(key)) candidateMap.set(key, cand);
+      if (candidateMap.size >= 30) break;
     }
+    const candidates = [...candidateMap.values()];
+
+    if (candidates.length === 0) {
+      results.push({
+        id: check.id,
+        rule: check.rule,
+        category: check.category,
+        wcag: check.wcag,
+        task,
+        status: 'Needs Human Review',
+        status_label: 'Needs Human Review',
+        description: 'Keine relevanten Kandidaten im Scan gefunden.',
+        agent_descriptions: ['Keine relevanten Elemente fuer diesen Test auf der Seite gefunden.'],
+        nodes: [],
+      });
+      continue;
+    }
+
+    const decision = await evaluateManualCheckDecision(client, pageContext, check, candidates);
+    if (!decision) {
+      results.push({
+        id: check.id,
+        rule: check.rule,
+        category: check.category,
+        wcag: check.wcag,
+        task,
+        status: 'Needs Human Review',
+        status_label: 'Needs Human Review',
+        description: 'Agent-Entscheidung nicht verifizierbar.',
+        agent_descriptions: ['Agent konnte keine valide Entscheidung fuer diesen Check liefern.'],
+        nodes: candidates.slice(0, 3).map((c) => ({ url: c.url, selector: c.selector, html: c.html })),
+      });
+      continue;
+    }
+
+    const chosen = candidates.filter((c) => decision.evidence_candidate_ids.includes(c.id));
+    const evidence = (chosen.length > 0 ? chosen : candidates.slice(0, 3)).slice(0, 3);
+    const statusLabel = decision.status === 'Pass'
+      ? 'Verified by AI - Pass'
+      : decision.status;
+
+    results.push({
+      id: check.id,
+      rule: check.rule,
+      category: check.category,
+      wcag: check.wcag,
+      task,
+      status: decision.status,
+      status_label: statusLabel,
+      description: decision.explanation,
+      remediation: decision.remediation,
+      agent_descriptions: decision.agent_descriptions,
+      nodes: evidence.map((c) => ({ url: c.url, selector: c.selector, html: c.html })),
+    });
   }
+
+  rawResult.manual_checks = results;
 
   return rawResult;
 }

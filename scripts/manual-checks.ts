@@ -10,7 +10,8 @@ export interface ManualCheckDefinition {
   category: ManualCheckCategory;
   wcag: string;
   appliesTo: Array<'incomplete' | 'suspicious-alt-text'>;
-  label: string;
+  task: string;
+  label?: string;
 }
 
 // Gemeinsame Referenz fuer manuelle/semantische Checks.
@@ -22,6 +23,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Multimedia',
     wcag: '1.1.1',
     appliesTo: ['suspicious-alt-text', 'incomplete'],
+    task: 'Sind Alternativtexte fuer Bilder inhaltlich passend und nicht generisch?',
     label: 'Alternativtexte fuer Bilder',
   },
   {
@@ -30,6 +32,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Tastaturnavigation',
     wcag: '2.4.7',
     appliesTo: ['incomplete'],
+    task: 'Sind alle interaktiven Elemente mit der Tastatur klar fokussierbar?',
     label: 'Sichtbarer Fokus',
   },
   {
@@ -38,6 +41,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Tastaturnavigation',
     wcag: '2.1.2',
     appliesTo: ['incomplete'],
+    task: 'Gibt es keine Tastaturfalle und ist die Navigation per Tastatur durchgaengig moeglich?',
     label: 'Keine Tastaturfalle',
   },
   {
@@ -46,6 +50,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Inhalte & Verstaendlichkeit',
     wcag: '2.4.2',
     appliesTo: ['incomplete'],
+    task: 'Sind Seitentitel vorhanden, eindeutig und beschreiben den Seiteninhalt?',
     label: 'Seitentitel vorhanden und eindeutig',
   },
   {
@@ -54,6 +59,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Inhalte & Verstaendlichkeit',
     wcag: '1.3.1',
     appliesTo: ['incomplete'],
+    task: 'Sind Ueberschriften semantisch korrekt strukturiert und sinnvoll geschachtelt?',
     label: 'Semantische Struktur und Ueberschriften',
   },
   {
@@ -62,6 +68,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Inhalte & Verstaendlichkeit',
     wcag: '3.1.1',
     appliesTo: ['incomplete'],
+    task: 'Ist die Hauptsprache der Seite korrekt ausgezeichnet?',
     label: 'Sprache der Seite',
   },
   {
@@ -70,6 +77,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Inhalte & Verstaendlichkeit',
     wcag: '3.1.2',
     appliesTo: ['incomplete'],
+    task: 'Sind abweichende Sprachabschnitte innerhalb der Seite korrekt markiert?',
     label: 'Sprache einzelner Textteile',
   },
   {
@@ -78,6 +86,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Inhalte & Verstaendlichkeit',
     wcag: '1.4.12',
     appliesTo: ['incomplete'],
+    task: 'Bleibt der Inhalt bei angepassten Textabstaenden vollstaendig nutzbar?',
     label: 'Textabstaende ohne Inhaltsverlust',
   },
   {
@@ -86,6 +95,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Multimedia',
     wcag: '2.3.1',
     appliesTo: ['incomplete'],
+    task: 'Werden Animationen reduziert und keine potenziell triggernden Effekte erzwungen?',
     label: 'Animationen ohne Flackern/Trigger',
   },
   {
@@ -94,6 +104,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Formulare & Eingaben',
     wcag: '3.3.2',
     appliesTo: ['incomplete'],
+    task: 'Sind Eingabefelder mit klaren Labels und Hinweisen versehen?',
     label: 'Labels und Eingabehinweise',
   },
   {
@@ -102,6 +113,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     category: 'Formulare & Eingaben',
     wcag: '1.3.1',
     appliesTo: ['incomplete'],
+    task: 'Sind Labels semantisch korrekt mit den zugehoerigen Eingabefeldern verknuepft?',
     label: 'Semantische Zuordnung von Labels',
   },
 ];

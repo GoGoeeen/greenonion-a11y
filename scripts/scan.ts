@@ -38,11 +38,19 @@ interface ManualCheckResult {
   id: string;
   rule: string;
   category: string;
+  wcag: string;
+  task: string;
+  appliesTo: Array<'incomplete' | 'suspicious-alt-text'>;
   wcag_criteria: string[];
   status: ComplianceStatus;
   status_label: string;
   description: string;
+  remediation?: {
+    recommended_fix: string;
+    explanation: string;
+  };
   agent_descriptions: string[];
+  nodes: Array<{ url: string; selector: string; html: string }>;
   affected_pages: string[];
 }
 
@@ -176,7 +184,11 @@ interface RawIssue {
   helpUrl?: string;
   wcag?: string;
   wcagTags?: string[];
-  nodes?: Array<{ selector: string; html?: string; failureSummary?: string }>;
+  remediation?: {
+    recommended_fix?: string;
+    explanation?: string;
+  };
+  nodes?: Array<{ url?: string; selector: string; html?: string; failureSummary?: string }>;
   needsReview?: boolean;
 }
 
@@ -196,6 +208,105 @@ interface RawScanResult {
   score: number;
   pages: RawPage[];
   manual_checks?: ManualCheckResult[];
+}
+
+function mergeManualCheckEvidence(
+  evaluated: ManualCheckResult[],
+  fromAgent: unknown,
+): ManualCheckResult[] {
+  const source = Array.isArray(fromAgent) ? fromAgent : [];
+  const byId = new Map<
+    string,
+    {
+      nodes: Array<{ url: string; selector: string; html: string }>;
+      agent_descriptions: string[];
+      status?: ComplianceStatus;
+      status_label?: string;
+      description?: string;
+      remediation?: { recommended_fix: string; explanation: string };
+    }
+  >();
+
+  for (const entry of source) {
+    if (!entry || typeof entry !== 'object') continue;
+    const raw = entry as Record<string, unknown>;
+    const id = String(raw.id || '').trim();
+    if (!id) continue;
+
+    const rawNodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+    const nodes = rawNodes
+      .map((node) => {
+        if (!node || typeof node !== 'object') return null;
+        const n = node as Record<string, unknown>;
+        const url = String(n.url || '').trim();
+        const selector = String(n.selector || '').trim();
+        const html = String(n.html || '');
+        if (!url || !selector || !html) return null;
+        return { url, selector, html };
+      })
+      .filter((node): node is { url: string; selector: string; html: string } => node !== null);
+
+    const descriptions = Array.isArray(raw.agent_descriptions)
+      ? raw.agent_descriptions.map((d) => String(d || '').trim()).filter(Boolean)
+      : [];
+
+    const statusRaw = String(raw.status || '').trim() as ComplianceStatus;
+    const status = statusRaw === 'Pass' || statusRaw === 'Fail' || statusRaw === 'Needs Human Review'
+      ? statusRaw
+      : undefined;
+    const status_label = String(raw.status_label || '').trim() || undefined;
+    const description = String(raw.description || '').trim() || undefined;
+    const remediationRaw = raw.remediation && typeof raw.remediation === 'object'
+      ? (raw.remediation as Record<string, unknown>)
+      : null;
+    const recommended_fix = remediationRaw ? String(remediationRaw.recommended_fix || '').trim() : '';
+    const remediationExplanation = remediationRaw ? String(remediationRaw.explanation || '').trim() : '';
+    const remediation = recommended_fix && remediationExplanation
+      ? { recommended_fix, explanation: remediationExplanation }
+      : undefined;
+
+    byId.set(id, {
+      nodes,
+      agent_descriptions: descriptions,
+      status,
+      status_label,
+      description,
+      remediation,
+    });
+  }
+
+  const dedupeNodes = (nodes: Array<{ url: string; selector: string; html: string }>) => {
+    const map = new Map<string, { url: string; selector: string; html: string }>();
+    for (const node of nodes) {
+      const key = `${node.url}||${node.selector}||${node.html}`;
+      if (!map.has(key)) map.set(key, node);
+    }
+    return [...map.values()].slice(0, 5);
+  };
+
+  const dedupeStrings = (values: string[]) => [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+
+  return evaluated.map((check) => {
+    const sourceEntry = byId.get(check.id);
+    if (!sourceEntry) return check;
+
+    const mergedNodes = dedupeNodes([...(check.nodes || []), ...(sourceEntry.nodes || [])]);
+    const mergedDescriptions = dedupeStrings([...(check.agent_descriptions || []), ...(sourceEntry.agent_descriptions || [])]);
+    const nextStatus = sourceEntry.status || check.status;
+    const nextStatusLabel = sourceEntry.status_label || (nextStatus === 'Pass' ? 'Verified by AI - Pass' : check.status_label);
+    const nextDescription = sourceEntry.description || check.description;
+
+    return {
+      ...check,
+      status: nextStatus,
+      status_label: nextStatusLabel,
+      description: nextDescription,
+      remediation: sourceEntry.remediation || check.remediation,
+      nodes: mergedNodes,
+      agent_descriptions: mergedDescriptions,
+      affected_pages: dedupeStrings([...(check.affected_pages || []), ...mergedNodes.map((n) => n.url)]),
+    };
+  });
 }
 
 function deduplicateFindings(pages: RawPage[]): Finding[] {
@@ -271,9 +382,37 @@ function evaluateManualChecks(
   checks: ManualCheckDefinition[],
   aiEvaluated: boolean,
 ): ManualCheckResult[] {
+  const toEvidenceNode = (
+    pageUrl: string,
+    node: { url?: string; selector?: string; html?: string },
+  ): { url: string; selector: string; html: string } | null => {
+    const selector = String(node?.selector || "").trim();
+    const html = String(node?.html || "").trim();
+    const url = String(node?.url || pageUrl || "").trim();
+    if (!selector || !html || !url) return null;
+    return { url, selector, html };
+  };
+
+  const dedupeEvidenceNodes = (
+    nodes: Array<{ url: string; selector: string; html: string }>,
+    limit = 5,
+  ) => {
+    const map = new Map<string, { url: string; selector: string; html: string }>();
+    for (const node of nodes) {
+      const key = `${node.url}||${node.selector}||${node.html}`;
+      if (!map.has(key)) map.set(key, node);
+      if (map.size >= limit) break;
+    }
+    return [...map.values()];
+  };
+
   return checks.map((check) => {
+    const taskText = check.task || check.label || check.rule;
     const failPages = new Set<string>();
     const failDescriptions: string[] = [];
+    const failEvidenceNodes: Array<{ url: string; selector: string; html: string }> = [];
+    const reviewEvidenceNodes: Array<{ url: string; selector: string; html: string }> = [];
+    let remediation: { recommended_fix: string; explanation: string } | undefined;
     let hasApplicableCandidates = false;
 
     for (const page of pages) {
@@ -281,8 +420,16 @@ function evaluateManualChecks(
       const pageIncomplete = Array.isArray(page.incomplete) ? page.incomplete : [];
 
       if (check.appliesTo.includes('suspicious-alt-text')) {
-        const hasSuspiciousCandidates = pageIssues.some((i) => i.rule === 'suspicious-alt-text');
+        const suspiciousIssues = pageIssues.filter((i) => i.rule === 'suspicious-alt-text');
+        const hasSuspiciousCandidates = suspiciousIssues.length > 0;
         if (hasSuspiciousCandidates) hasApplicableCandidates = true;
+        for (const issue of suspiciousIssues) {
+          const nodes = Array.isArray(issue.nodes) ? issue.nodes : [];
+          for (const node of nodes) {
+            const normalized = toEvidenceNode(page.url, node);
+            if (normalized) reviewEvidenceNodes.push(normalized);
+          }
+        }
       }
 
       if (check.appliesTo.includes('incomplete')) {
@@ -293,6 +440,13 @@ function evaluateManualChecks(
         });
         if (relevantIncomplete.length > 0) {
           hasApplicableCandidates = true;
+          for (const issue of relevantIncomplete) {
+            const nodes = Array.isArray(issue.nodes) ? issue.nodes : [];
+            for (const node of nodes) {
+              const normalized = toEvidenceNode(page.url, node);
+              if (normalized) reviewEvidenceNodes.push(normalized);
+            }
+          }
         }
       }
 
@@ -309,6 +463,23 @@ function evaluateManualChecks(
           if (text && !failDescriptions.includes(text)) {
             failDescriptions.push(text);
           }
+          const candidateFix = typeof issue.remediation?.recommended_fix === 'string'
+            ? issue.remediation.recommended_fix.trim()
+            : '';
+          const candidateExplanation = typeof issue.remediation?.explanation === 'string'
+            ? issue.remediation.explanation.trim()
+            : '';
+          if (!remediation && candidateFix && candidateExplanation) {
+            remediation = {
+              recommended_fix: candidateFix,
+              explanation: candidateExplanation,
+            };
+          }
+          const nodes = Array.isArray(issue.nodes) ? issue.nodes : [];
+          for (const node of nodes) {
+            const normalized = toEvidenceNode(page.url, node);
+            if (normalized) failEvidenceNodes.push(normalized);
+          }
         }
       }
     }
@@ -318,11 +489,16 @@ function evaluateManualChecks(
         id: check.id,
         rule: check.rule,
         category: check.category,
+        wcag: check.wcag,
+        task: taskText,
+        appliesTo: check.appliesTo,
         wcag_criteria: [check.wcag],
         status: 'Fail',
         status_label: 'Fail',
         description: 'Agent hat einen Verstoess zu diesem Check erkannt.',
+        remediation,
         agent_descriptions: failDescriptions,
+        nodes: dedupeEvidenceNodes(failEvidenceNodes, 5),
         affected_pages: [...failPages],
       };
     }
@@ -332,27 +508,39 @@ function evaluateManualChecks(
         id: check.id,
         rule: check.rule,
         category: check.category,
+        wcag: check.wcag,
+        task: taskText,
+        appliesTo: check.appliesTo,
         wcag_criteria: [check.wcag],
         status: 'Pass',
         status_label: 'Verified by AI - Pass',
         description: 'Kein Verstoess erkannt.',
         agent_descriptions: [],
+        nodes: [],
         affected_pages: [],
       };
     }
+
+    const reviewReason = hasApplicableCandidates
+      ? 'Automatische Bewertung war nicht eindeutig; die vorliegenden Hinweise sind semantisch nicht sicher als Pass oder Fail klassifizierbar.'
+      : 'Keine relevanten Elemente fuer diesen Test auf der Seite gefunden; manuelle Pruefung erforderlich.';
 
     return {
       id: check.id,
       rule: check.rule,
       category: check.category,
+      wcag: check.wcag,
+      task: taskText,
+      appliesTo: check.appliesTo,
       wcag_criteria: [check.wcag],
       status: 'Needs Human Review',
       status_label: 'Needs Human Review',
       description: hasApplicableCandidates
         ? 'Automatische Bewertung nicht eindeutig, manuelle Pruefung erforderlich.'
         : 'Fuer diesen Check lagen keine verifizierbaren Kandidaten vor.',
-      agent_descriptions: [],
-      affected_pages: [],
+      agent_descriptions: [reviewReason],
+      nodes: dedupeEvidenceNodes(reviewEvidenceNodes, 5),
+      affected_pages: dedupeEvidenceNodes(reviewEvidenceNodes, 100).map((n) => n.url),
     };
   });
 }
@@ -446,6 +634,7 @@ async function saveScanResults(
     minor_count: data.counts.minor,
     score: data.score,
     findings: data.findings,
+    manual_checks: data.rawResult.manual_checks ?? [],
     raw_scan_result: data.rawResult,
     status: 'completed',
     error_message: data.errorMessage || null,
@@ -613,7 +802,9 @@ async function main() {
 
     const finalScanResult: RawScanResult = enrichedScanResult;
 
-    finalScanResult.manual_checks = evaluateManualChecks(finalScanResult.pages, manualChecks, Boolean(openaiApiKey));
+    const evaluatedManualChecks = evaluateManualChecks(finalScanResult.pages, manualChecks, Boolean(openaiApiKey));
+    const mergedManualChecks = mergeManualCheckEvidence(evaluatedManualChecks, finalScanResult.manual_checks);
+    finalScanResult.manual_checks = mergedManualChecks;
 
     // Findings deduplizieren
     const findings = deduplicateFindings(enrichedScanResult.pages);
@@ -652,7 +843,10 @@ async function main() {
         pagesScanned: finalScanResult.pagesScanned,
         pagesScannedUrls,
         findings,
-        rawResult: finalScanResult,
+        rawResult: {
+          ...finalScanResult,
+          manual_checks: finalScanResult.manual_checks ?? [],
+        },
         score,
         counts,
         errorMessage: warningMessage,
