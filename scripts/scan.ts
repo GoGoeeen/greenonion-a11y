@@ -382,6 +382,9 @@ function evaluateManualChecks(
   checks: ManualCheckDefinition[],
   aiEvaluated: boolean,
 ): ManualCheckResult[] {
+  const AUTO_PASS_TECHNICAL_WCAG = new Set(['3.1.1', '2.4.2', '2.1.2']);
+  const QUALITATIVE_REVIEW_WCAG = new Set(['1.1.1', '1.3.1']);
+
   const toEvidenceNode = (
     pageUrl: string,
     node: { url?: string; selector?: string; html?: string },
@@ -500,6 +503,47 @@ function evaluateManualChecks(
         agent_descriptions: failDescriptions,
         nodes: dedupeEvidenceNodes(failEvidenceNodes, 5),
         affected_pages: [...failPages],
+      };
+    }
+
+    const relevantCandidates = dedupeEvidenceNodes(reviewEvidenceNodes, 20);
+    const hasRelevantCandidates = relevantCandidates.length > 0;
+    const isTechnicalAutoPassCriterion = AUTO_PASS_TECHNICAL_WCAG.has(check.wcag);
+    const isQualitativeCriterion = QUALITATIVE_REVIEW_WCAG.has(check.wcag);
+
+    if (!hasRelevantCandidates && isTechnicalAutoPassCriterion) {
+      return {
+        id: check.id,
+        rule: check.rule,
+        category: check.category,
+        wcag: check.wcag,
+        task: taskText,
+        appliesTo: check.appliesTo,
+        wcag_criteria: [check.wcag],
+        status: 'Pass',
+        status_label: 'Auto-Pass (Keine technischen Verstöße gefunden)',
+        description: 'Keine relevanten technischen Verstoesse im automatischen Scan gefunden.',
+        agent_descriptions: ['Die automatisierte Prüfung hat keine relevanten Verstöße für dieses Kriterium identifiziert. Eine manuelle Stichprobe ist optional.'],
+        nodes: [],
+        affected_pages: [],
+      };
+    }
+
+    if (hasRelevantCandidates && isQualitativeCriterion) {
+      return {
+        id: check.id,
+        rule: check.rule,
+        category: check.category,
+        wcag: check.wcag,
+        task: taskText,
+        appliesTo: check.appliesTo,
+        wcag_criteria: [check.wcag],
+        status: 'Needs Human Review',
+        status_label: 'Needs Human Review',
+        description: 'Qualitatives Kriterium mit vorhandenen Elementen; automatische Bewertung nicht eindeutig.',
+        agent_descriptions: ['Es wurden relevante Elemente gefunden, die Bewertung dieses qualitativen Kriteriums erfordert jedoch eine manuelle Sichtpruefung.'],
+        nodes: dedupeEvidenceNodes(reviewEvidenceNodes, 5),
+        affected_pages: dedupeEvidenceNodes(reviewEvidenceNodes, 100).map((n) => n.url),
       };
     }
 
@@ -622,7 +666,7 @@ async function saveScanResults(
   const expectedPages = data.rawResult.pages?.length ?? 0;
   const expectedIssues = data.rawResult.totalIssues;
 
-  const updatePayload = {
+  const updatePayloadBase = {
     domain: data.domain,
     scan_date: new Date().toISOString(),
     pages_scanned: data.pagesScanned,
@@ -634,20 +678,38 @@ async function saveScanResults(
     minor_count: data.counts.minor,
     score: data.score,
     findings: data.findings,
-    manual_checks: data.rawResult.manual_checks ?? [],
     raw_scan_result: data.rawResult,
     status: 'completed',
     error_message: data.errorMessage || null,
     updated_at: new Date().toISOString(),
   };
+  const updatePayloadWithManualChecks = {
+    ...updatePayloadBase,
+    manual_checks: data.rawResult.manual_checks ?? [],
+  };
+  let includeManualChecksColumn = true;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const payload = includeManualChecksColumn ? updatePayloadWithManualChecks : updatePayloadBase;
     const { error: saveError } = await supabase
       .from('accessibility_scans')
-      .update(updatePayload)
+      .update(payload)
       .eq('id', scanId);
 
     if (saveError) {
+      const msg = String(saveError.message || '');
+      const missingManualChecksColumn =
+        includeManualChecksColumn &&
+        /manual_checks/i.test(msg) &&
+        /(could not find|schema cache|column)/i.test(msg);
+
+      if (missingManualChecksColumn) {
+        console.warn('  Hinweis: Spalte "manual_checks" fehlt in accessibility_scans. Speichere ohne Spalten-Update; Daten bleiben in raw_scan_result.manual_checks enthalten.');
+        includeManualChecksColumn = false;
+        attempt--;
+        continue;
+      }
+
       throw new Error(`Supabase save failed: ${saveError.message}`);
     }
 

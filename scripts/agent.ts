@@ -408,6 +408,7 @@ async function evaluateManualCheckDecision(
           content: [
             'Du bist ein Accessibility-Reviewer fuer semantische Checks.',
             'Entscheide ausschliesslich anhand der uebergebenen Kandidaten: bestaetigen sie den Verdacht fuer den Check?',
+            'Falls keine Kandidaten/Beweise geliefert werden UND die automatische Vorpruefung keine Fehler meldet, schlage einen "Pass" vor, sofern keine offensichtliche manuelle Sichtpruefung (wie bei komplexen Multimedia-Inhalten) zwingend erforderlich ist.',
             'Du bist verpflichtet, zu jedem Fail oder Needs-Review-Status mindestens 1-3 konkrete Code-Beispiele (Nodes) aus dem Scan-Input mitzuliefern.',
             'Nutze bei Bildern den Kontext aus check.task, URL, Seitentitel, issueDescription und HTML-Snippet fuer semantisch passende Alt-Texte.',
             'Wenn du einen eindeutigen Verstoß (Fail) feststellst, der technisch loesbar ist (z.B. fehlende Alt-Texte, falsche ARIA-Attribute, fehlende Labels), generiere im Feld recommended_fix den fertigen Korrektur-Code.',
@@ -594,6 +595,7 @@ export async function runAgentEvaluation(
   };
 
   const results: ManualCheckEvidenceEntry[] = [];
+  const QUALITATIVE_REVIEW_WCAG = new Set(['1.1.1', '1.3.1']);
 
   for (const check of manualChecks) {
     const task = check.task || check.label || check.rule;
@@ -621,16 +623,21 @@ export async function runAgentEvaluation(
     const candidates = [...candidateMap.values()];
 
     if (candidates.length === 0) {
+      const isQualitative = QUALITATIVE_REVIEW_WCAG.has(check.wcag);
       results.push({
         id: check.id,
         rule: check.rule,
         category: check.category,
         wcag: check.wcag,
         task,
-        status: 'Needs Human Review',
-        status_label: 'Needs Human Review',
-        description: 'Keine relevanten Kandidaten im Scan gefunden.',
-        agent_descriptions: ['Keine relevanten Elemente fuer diesen Test auf der Seite gefunden.'],
+        status: isQualitative ? 'Needs Human Review' : 'Pass',
+        status_label: isQualitative
+          ? 'Needs Human Review'
+          : 'Auto-Pass (Keine technischen Verstöße gefunden)',
+        description: isQualitative
+          ? 'Keine ausreichenden technischen Belege; qualitative Sichtpruefung empfohlen.'
+          : 'Keine relevanten technischen Verstoesse in der automatisierten Vorpruefung gefunden.',
+        agent_descriptions: ['Die automatisierte Prüfung hat keine relevanten Verstöße für dieses Kriterium identifiziert. Eine manuelle Stichprobe ist optional.'],
         nodes: [],
       });
       continue;
