@@ -178,87 +178,7 @@ interface RawScanResult {
   totalIssues: number;
   score: number;
   pages: RawPage[];
-  manual_checks?: ManualCheck[];
 }
-
-interface ManualCheck {
-  category: string;
-  wcag: string;
-  task: string;
-}
-
-const manualChecks: ManualCheck[] = [
-  {
-    category: 'Tastaturnavigation',
-    wcag: '2.1.1',
-    task: 'Sind alle interaktiven Elemente (Links, Buttons, Formularfelder) ausschliesslich mit der Tab-Taste erreichbar?',
-  },
-  {
-    category: 'Tastaturnavigation',
-    wcag: '2.4.3',
-    task: 'Ist die Fokus-Reihenfolge logisch und dem visuellen Layout entsprechend?',
-  },
-  {
-    category: 'Tastaturnavigation',
-    wcag: '2.4.7',
-    task: 'Gibt es eine klar sichtbare Fokus-Hervorhebung fuer das jeweils aktive Element?',
-  },
-  {
-    category: 'Tastaturnavigation',
-    wcag: '2.1.2',
-    task: 'Gibt es "Tastaturfallen", aus denen man mit der Tab-Taste nicht mehr entkommt (z.B. in Modals oder Carousels)?',
-  },
-  {
-    category: 'Screenreader-Test',
-    wcag: '4.1.2',
-    task: 'Wurde die Seite mit einem Screenreader (NVDA, JAWS oder VoiceOver) getestet? Werden alle Inhalte, Buttons und Formulare korrekt vorgelesen?',
-  },
-  {
-    category: 'Screenreader-Test',
-    wcag: '1.3.1',
-    task: 'Werden Ueberschriften, Listen und Tabellen vom Screenreader korrekt als solche erkannt und angesagt?',
-  },
-  {
-    category: 'Zoom & Skalierbarkeit',
-    wcag: '1.4.4',
-    task: 'Funktioniert die Seite ohne Informationsverlust oder Ueberlappungen bei einer Browser-Vergroesserung auf 200%?',
-  },
-  {
-    category: 'Zoom & Skalierbarkeit',
-    wcag: '1.4.10',
-    task: 'Ist die Seite bei einer Viewport-Breite von 320px (Reflow) ohne horizontales Scrollen nutzbar?',
-  },
-  {
-    category: 'Inhalte & Verstaendlichkeit',
-    wcag: '3.1.5 (AAA)',
-    task: 'Sind alle Inhalte klar, verstaendlich und moeglichst in einfacher Sprache formuliert?',
-  },
-  {
-    category: 'Inhalte & Verstaendlichkeit',
-    wcag: '2.4.6',
-    task: 'Sind alle Ueberschriften und Labels beschreibend und aussagekraeftig?',
-  },
-  {
-    category: 'Formulare & Fehlermeldungen',
-    wcag: '3.3.1',
-    task: 'Werden Formularfehler klar und verstaendlich beschrieben (nicht nur durch Farbe signalisiert)?',
-  },
-  {
-    category: 'Formulare & Fehlermeldungen',
-    wcag: '3.3.2',
-    task: 'Gibt es fuer alle Formularfelder klare Hinweise, welche Eingabe erwartet wird?',
-  },
-  {
-    category: 'Multimedia',
-    wcag: '1.2.2',
-    task: 'Haben alle Videos Untertitel (Captions)?',
-  },
-  {
-    category: 'Multimedia',
-    wcag: '1.2.3',
-    task: 'Gibt es fuer Videos eine Audiodeskription oder ein Texttranskript?',
-  },
-];
 
 function deduplicateFindings(pages: RawPage[]): Finding[] {
   const map = new Map<string, Finding>();
@@ -542,10 +462,7 @@ async function main() {
       scan({ url: targetUrl, maxPages: effectiveMaxPages }) as Promise<RawScanResult>,
       timeoutPromise,
     ]);
-    const finalScanResult: RawScanResult = {
-      ...scanResult,
-      manual_checks: manualChecks,
-    };
+    const finalScanResult: RawScanResult = scanResult;
 
     // Findings deduplizieren
     const findings = deduplicateFindings(finalScanResult.pages);
@@ -570,7 +487,6 @@ async function main() {
         ...counts,
         total_findings: findings.reduce((sum, f) => sum + f.element_count, 0),
         findings,
-        manual_checks: manualChecks,
         warning: warningMessage,
       };
       writeFileSync(outputPath, JSON.stringify(output, null, 2));

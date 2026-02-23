@@ -181,7 +181,6 @@ function generateHTML(scanResult, customerName) {
         <li><strong>Kritische Verstöße sofort beheben</strong> — Fehlende Alt-Texte, Kontrast-Probleme, fehlende Formular-Labels</li>
         <li><strong>Schwerwiegende Verstöße priorisiert angehen</strong> — Heading-Hierarchie, ARIA-Attribute, Tastaturnavigation</li>
         <li><strong>Automatisierte Remediation</strong> — GreenOnion kann ca. 60–70% der Verstöße automatisch beheben</li>
-        <li><strong>Manueller NVDA-Test</strong> — Screenreader-Prüfung für die verbleibenden 30–40%</li>
         <li><strong>Barrierefreiheitserklärung</strong> veröffentlichen (gesetzlich vorgeschrieben)</li>
         <li><strong>Regelmäßiges Monitoring</strong> einrichten — Neue Inhalte können neue Barrieren erzeugen</li>
       </ol>
