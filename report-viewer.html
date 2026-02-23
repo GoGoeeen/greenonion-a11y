@@ -106,17 +106,12 @@
                     errorBox.textContent = data.error_message;
                 }
 
-                if (data.status === 'completed' && data.results) {
+                const raw = data.raw_scan_result || data.results || null;
+                if (data.status === 'completed' && raw) {
                     document.getElementById('resultsCard').style.display = 'block';
-                    document.getElementById('score').textContent = data.results.score ?? 'N/A';
-                    
-                    // Simple count logic depending on structure
-                    const count = data.results.pages 
-                        ? data.results.pages.reduce((sum, p) => sum + (p.violations?.length || 0), 0)
-                        : (data.results.violations?.length || 0); // fallback if distinct structure
-                    
-                    document.getElementById('violationCount').textContent = count;
-                    document.getElementById('rawResults').textContent = JSON.stringify(data.results, null, 2);
+                    document.getElementById('score').textContent = data.score ?? raw.score ?? 'N/A';
+                    document.getElementById('violationCount').textContent = data.total_findings ?? raw.totalIssues ?? 'N/A';
+                    document.getElementById('rawResults').textContent = JSON.stringify(raw, null, 2);
                 }
 
             } catch (err) {

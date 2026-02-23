@@ -32,6 +32,42 @@ const supabase = (supabaseUrl && supabaseServiceKey)
   ? createClient(supabaseUrl, supabaseServiceKey)
   : null;
 
+async function verifyRawScanResult(scanId, expectedRawResult) {
+  const expectedLength = JSON.stringify(expectedRawResult).length;
+  const expectedPages = expectedRawResult.pages?.length || 0;
+  const expectedIssues = expectedRawResult.totalIssues;
+
+  const { data, error } = await supabase
+    .from('accessibility_scans')
+    .select('raw_scan_result')
+    .eq('id', scanId)
+    .single();
+
+  if (error) {
+    throw new Error(`Supabase verify failed: ${error.message}`);
+  }
+
+  const persisted = data?.raw_scan_result;
+  if (!persisted || typeof persisted !== 'object') {
+    throw new Error('Supabase verify failed: raw_scan_result missing after save');
+  }
+
+  const persistedLength = JSON.stringify(persisted).length;
+  const persistedPages = persisted.pages?.length || 0;
+  const persistedIssues = persisted.totalIssues;
+  const isValid =
+    persisted.pagesScanned === expectedRawResult.pagesScanned &&
+    persistedPages === expectedPages &&
+    persistedIssues === expectedIssues &&
+    persistedLength >= expectedLength;
+
+  if (!isValid) {
+    throw new Error(
+      `Supabase verify failed: raw_scan_result mismatch (expected len=${expectedLength}, pages=${expectedPages}, issues=${expectedIssues}; got len=${persistedLength}, pages=${persistedPages}, issues=${String(persistedIssues)})`
+    );
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // CLI Argument Parser
@@ -283,31 +319,49 @@ async function runWorker() {
             }
           }
 
-          // 4. Save results to database
-          const { error: updateError } = await supabase
-            .from('accessibility_scans')
-            .update({
-              status: 'completed',
-              scan_date: new Date().toISOString(),
-              pages_scanned: result.pagesScanned,
-              pages_scanned_urls: result.pages.map(p => p.url),
-              total_findings: result.totalIssues,
-              critical_count: criticalCount,
-              serious_count: seriousCount,
-              moderate_count: moderateCount,
-              minor_count: minorCount,
-              score: result.score,
-              findings: allFindings,
-              raw_scan_result: result,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', scanJob.id);
+          // 4. Save results to database + verify persisted raw payload
+          let saveOk = false;
+          let lastSaveError = null;
 
-          if (updateError) {
-            console.error(`Failed to update scan results:`, updateError.message);
-          } else {
-            console.log(`✅ Scan completed for ${scanJob.domain}`);
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            const { error: updateError } = await supabase
+              .from('accessibility_scans')
+              .update({
+                status: 'completed',
+                scan_date: new Date().toISOString(),
+                pages_scanned: result.pagesScanned,
+                pages_scanned_urls: result.pages.map(p => p.url),
+                total_findings: result.totalIssues,
+                critical_count: criticalCount,
+                serious_count: seriousCount,
+                moderate_count: moderateCount,
+                minor_count: minorCount,
+                score: result.score,
+                findings: allFindings,
+                raw_scan_result: result,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', scanJob.id);
+
+            if (updateError) {
+              lastSaveError = updateError.message;
+              break;
+            }
+
+            try {
+              await verifyRawScanResult(scanJob.id, result);
+              saveOk = true;
+              break;
+            } catch (verifyErr) {
+              lastSaveError = verifyErr.message;
+            }
           }
+
+          if (!saveOk) {
+            throw new Error(lastSaveError || 'Unknown save/verify error');
+          }
+
+          console.log(`Scan completed for ${scanJob.domain}`);
 
         } catch (scanError) {
           console.error(`❌ Scan failed for ${scanJob.domain}:`, scanError.message);
@@ -585,3 +639,4 @@ main().catch(err => {
   console.error('  Fataler Fehler:', err);
   process.exit(1);
 });
+

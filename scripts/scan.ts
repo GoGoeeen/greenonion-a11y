@@ -178,7 +178,87 @@ interface RawScanResult {
   totalIssues: number;
   score: number;
   pages: RawPage[];
+  manual_checks?: ManualCheck[];
 }
+
+interface ManualCheck {
+  category: string;
+  wcag: string;
+  task: string;
+}
+
+const manualChecks: ManualCheck[] = [
+  {
+    category: 'Tastaturnavigation',
+    wcag: '2.1.1',
+    task: 'Sind alle interaktiven Elemente (Links, Buttons, Formularfelder) ausschliesslich mit der Tab-Taste erreichbar?',
+  },
+  {
+    category: 'Tastaturnavigation',
+    wcag: '2.4.3',
+    task: 'Ist die Fokus-Reihenfolge logisch und dem visuellen Layout entsprechend?',
+  },
+  {
+    category: 'Tastaturnavigation',
+    wcag: '2.4.7',
+    task: 'Gibt es eine klar sichtbare Fokus-Hervorhebung fuer das jeweils aktive Element?',
+  },
+  {
+    category: 'Tastaturnavigation',
+    wcag: '2.1.2',
+    task: 'Gibt es "Tastaturfallen", aus denen man mit der Tab-Taste nicht mehr entkommt (z.B. in Modals oder Carousels)?',
+  },
+  {
+    category: 'Screenreader-Test',
+    wcag: '4.1.2',
+    task: 'Wurde die Seite mit einem Screenreader (NVDA, JAWS oder VoiceOver) getestet? Werden alle Inhalte, Buttons und Formulare korrekt vorgelesen?',
+  },
+  {
+    category: 'Screenreader-Test',
+    wcag: '1.3.1',
+    task: 'Werden Ueberschriften, Listen und Tabellen vom Screenreader korrekt als solche erkannt und angesagt?',
+  },
+  {
+    category: 'Zoom & Skalierbarkeit',
+    wcag: '1.4.4',
+    task: 'Funktioniert die Seite ohne Informationsverlust oder Ueberlappungen bei einer Browser-Vergroesserung auf 200%?',
+  },
+  {
+    category: 'Zoom & Skalierbarkeit',
+    wcag: '1.4.10',
+    task: 'Ist die Seite bei einer Viewport-Breite von 320px (Reflow) ohne horizontales Scrollen nutzbar?',
+  },
+  {
+    category: 'Inhalte & Verstaendlichkeit',
+    wcag: '3.1.5 (AAA)',
+    task: 'Sind alle Inhalte klar, verstaendlich und moeglichst in einfacher Sprache formuliert?',
+  },
+  {
+    category: 'Inhalte & Verstaendlichkeit',
+    wcag: '2.4.6',
+    task: 'Sind alle Ueberschriften und Labels beschreibend und aussagekraeftig?',
+  },
+  {
+    category: 'Formulare & Fehlermeldungen',
+    wcag: '3.3.1',
+    task: 'Werden Formularfehler klar und verstaendlich beschrieben (nicht nur durch Farbe signalisiert)?',
+  },
+  {
+    category: 'Formulare & Fehlermeldungen',
+    wcag: '3.3.2',
+    task: 'Gibt es fuer alle Formularfelder klare Hinweise, welche Eingabe erwartet wird?',
+  },
+  {
+    category: 'Multimedia',
+    wcag: '1.2.2',
+    task: 'Haben alle Videos Untertitel (Captions)?',
+  },
+  {
+    category: 'Multimedia',
+    wcag: '1.2.3',
+    task: 'Gibt es fuer Videos eine Audiodeskription oder ein Texttranskript?',
+  },
+];
 
 function deduplicateFindings(pages: RawPage[]): Finding[] {
   const map = new Map<string, Finding>();
@@ -292,30 +372,74 @@ async function saveScanResults(
   },
 ) {
   const totalFindings = data.findings.reduce((sum, f) => sum + f.element_count, 0);
+  const expectedRawJsonLength = JSON.stringify(data.rawResult).length;
+  const expectedPages = data.rawResult.pages?.length ?? 0;
+  const expectedIssues = data.rawResult.totalIssues;
 
-  const { error } = await supabase
-    .from('accessibility_scans')
-    .update({
-      domain: data.domain,
-      scan_date: new Date().toISOString(),
-      pages_scanned: data.pagesScanned,
-      pages_scanned_urls: data.pagesScannedUrls,
-      total_findings: totalFindings,
-      critical_count: data.counts.critical,
-      serious_count: data.counts.serious,
-      moderate_count: data.counts.moderate,
-      minor_count: data.counts.minor,
-      score: data.score,
-      findings: data.findings,
-      raw_scan_result: data.rawResult,
-      status: 'completed',
-      error_message: data.errorMessage || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', scanId);
+  const updatePayload = {
+    domain: data.domain,
+    scan_date: new Date().toISOString(),
+    pages_scanned: data.pagesScanned,
+    pages_scanned_urls: data.pagesScannedUrls,
+    total_findings: totalFindings,
+    critical_count: data.counts.critical,
+    serious_count: data.counts.serious,
+    moderate_count: data.counts.moderate,
+    minor_count: data.counts.minor,
+    score: data.score,
+    findings: data.findings,
+    raw_scan_result: data.rawResult,
+    status: 'completed',
+    error_message: data.errorMessage || null,
+    updated_at: new Date().toISOString(),
+  };
 
-  if (error) {
-    throw new Error(`Supabase save failed: ${error.message}`);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const { error: saveError } = await supabase
+      .from('accessibility_scans')
+      .update(updatePayload)
+      .eq('id', scanId);
+
+    if (saveError) {
+      throw new Error(`Supabase save failed: ${saveError.message}`);
+    }
+
+    const { data: verifyRow, error: verifyError } = await supabase
+      .from('accessibility_scans')
+      .select('raw_scan_result')
+      .eq('id', scanId)
+      .single();
+
+    if (verifyError) {
+      throw new Error(`Supabase verify failed: ${verifyError.message}`);
+    }
+
+    const persisted = verifyRow?.raw_scan_result as RawScanResult | null;
+    if (!persisted || typeof persisted !== 'object') {
+      if (attempt === 2) {
+        throw new Error('Supabase verify failed: raw_scan_result missing after save');
+      }
+      continue;
+    }
+
+    const persistedRawJsonLength = JSON.stringify(persisted).length;
+    const persistedPages = persisted.pages?.length ?? 0;
+    const persistedIssues = persisted.totalIssues;
+    const isValid =
+      persisted.pagesScanned === data.rawResult.pagesScanned &&
+      persistedPages === expectedPages &&
+      persistedIssues === expectedIssues &&
+      persistedRawJsonLength >= expectedRawJsonLength;
+
+    if (isValid) {
+      return;
+    }
+
+    if (attempt === 2) {
+      throw new Error(
+        `Supabase verify failed: raw_scan_result mismatch (expected len=${expectedRawJsonLength}, pages=${expectedPages}, issues=${expectedIssues}; got len=${persistedRawJsonLength}, pages=${persistedPages}, issues=${String(persistedIssues)})`,
+      );
+    }
   }
 }
 
@@ -418,12 +542,16 @@ async function main() {
       scan({ url: targetUrl, maxPages: effectiveMaxPages }) as Promise<RawScanResult>,
       timeoutPromise,
     ]);
+    const finalScanResult: RawScanResult = {
+      ...scanResult,
+      manual_checks: manualChecks,
+    };
 
     // Findings deduplizieren
-    const findings = deduplicateFindings(scanResult.pages);
+    const findings = deduplicateFindings(finalScanResult.pages);
     const score = calculateScore(findings);
     const counts = countSeverities(findings);
-    const pagesScannedUrls = scanResult.pages.map((p: RawPage) => p.url);
+    const pagesScannedUrls = finalScanResult.pages.map((p: RawPage) => p.url);
 
     console.log(`\n  Deduplizierte Findings: ${findings.length} Regeln`);
     console.log(`  Score: ${score}/100`);
@@ -436,12 +564,13 @@ async function main() {
       const output = {
         domain,
         scan_date: new Date().toISOString(),
-        pages_scanned: scanResult.pagesScanned,
+        pages_scanned: finalScanResult.pagesScanned,
         pages_scanned_urls: pagesScannedUrls,
         score,
         ...counts,
         total_findings: findings.reduce((sum, f) => sum + f.element_count, 0),
         findings,
+        manual_checks: manualChecks,
         warning: warningMessage,
       };
       writeFileSync(outputPath, JSON.stringify(output, null, 2));
@@ -450,10 +579,10 @@ async function main() {
       // Supabase-Modus
       await saveScanResults(supabase, scanId, {
         domain,
-        pagesScanned: scanResult.pagesScanned,
+        pagesScanned: finalScanResult.pagesScanned,
         pagesScannedUrls,
         findings,
-        rawResult: scanResult,
+        rawResult: finalScanResult,
         score,
         counts,
         errorMessage: warningMessage,

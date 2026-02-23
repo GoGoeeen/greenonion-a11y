@@ -324,27 +324,86 @@ async function scanPageHTMLCS(page) {
 }
 
 // Deduplicate: Wenn axe und HTMLCS dasselbe Element + gleiche Regel finden, behalte nur axe
+function normalizeSelector(selector) {
+  return String(selector || '')
+    .toLowerCase()
+    .replace(/\\:/g, ':')
+    .replace(/["']/g, '')
+    .replace(/\s*>\s*/g, ' > ')
+    .replace(/:nth-child\(\d+\)/g, '')
+    .replace(/:nth-of-type\(\d+\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function mapHtmlcsIssueToAxeRule(issue) {
+  const code = String(issue.htmlcsCode || '');
+  const shortRule = String(issue.rule || '');
+
+  // Kontrast: HTMLCS G18.Fail <-> axe color-contrast
+  if (code === 'WCAG2AA.Principle1.Guideline1_4.1_4_3.G18.Fail') return 'color-contrast';
+
+  // Form labels / accessible name: HTMLCS F68, H91.Input*.Name <-> axe label
+  if (shortRule === 'F68' || /H91\.Input[^.]*\.Name$/.test(code)) return 'label';
+
+  // Heading hierarchy: HTMLCS G141 <-> axe heading-order
+  if (shortRule === 'G141' || /\.G141$/.test(code)) return 'heading-order';
+
+  // Duplicate ID in ARIA context: HTMLCS F77 <-> axe duplicate-id-aria
+  if (shortRule === 'F77' || /\.F77$/.test(code)) return 'duplicate-id-aria';
+
+  // Existing baseline mappings
+  const ruleMap = {
+    H57: 'html-has-lang',
+    H58: 'html-lang-valid',
+    H44: 'label',
+    H65: 'label',
+    H71: 'label',
+    H37: 'image-alt',
+    H67: 'image-alt',
+    G18: 'color-contrast',
+    G145: 'color-contrast',
+    H25: 'document-title',
+    H64: 'frame-title',
+  };
+
+  return ruleMap[shortRule] || shortRule;
+}
+
 function deduplicateIssues(axeIssues, htmlcsIssues) {
   const axeSelectors = new Set();
+  const axeContrastSelectors = new Set();
+
   for (const issue of axeIssues) {
     for (const node of issue.nodes || []) {
-      axeSelectors.add(issue.rule + '::' + node.selector);
+      const normalized = normalizeSelector(node.selector);
+      axeSelectors.add(issue.rule + '::' + normalized);
+
+      // Kontrast-Issues aus axe als Source of Truth
+      if (issue.rule === 'color-contrast') {
+        axeContrastSelectors.add(normalized);
+      }
     }
   }
 
   const unique = htmlcsIssues.filter(issue => {
-    // Map HTMLCS rules to axe rule names for comparison
-    const ruleMap = {
-      'H57': 'html-has-lang', 'H58': 'html-lang-valid',
-      'H44': 'label', 'H65': 'label', 'H71': 'label',
-      'H37': 'image-alt', 'H67': 'image-alt',
-      'G18': 'color-contrast', 'G145': 'color-contrast',
-      'H25': 'document-title', 'H64': 'frame-title',
-    };
-    const mappedRule = ruleMap[issue.rule] || issue.rule;
+    // Schritt 2a: HTMLCS-Kontrastregel erkennen
+    const isHtmlcsContrastIssue =
+      issue.htmlcsCode === 'WCAG2AA.Principle1.Guideline1_4.1_4_3.G18.Fail';
+
+    // Schritt 2b: Kontrast-Duplikate gegen axe verwerfen
+    if (isHtmlcsContrastIssue) {
+      for (const node of issue.nodes || []) {
+        const normalized = normalizeSelector(node.selector);
+        if (axeContrastSelectors.has(normalized)) return false;
+      }
+    }
+
+    const mappedRule = mapHtmlcsIssueToAxeRule(issue);
 
     for (const node of issue.nodes || []) {
-      if (axeSelectors.has(mappedRule + '::' + node.selector)) return false;
+      const normalized = normalizeSelector(node.selector);
+      if (axeSelectors.has(mappedRule + '::' + normalized)) return false;
     }
     return true;
   });
@@ -886,6 +945,212 @@ async function testHeadingHierarchy(page) {
   }
 }
 
+// 1.1.1 (heuristic) Suspicious alt text - likely filename/placeholders
+async function testSuspiciousAltText(page) {
+  try {
+    const suspicious = await page.evaluate(() => {
+      const placeholderWords = new Set([
+        'bild', 'image', 'photo', 'grafik', 'picture', 'img',
+      ]);
+      const extensionPattern = /\.(jpg|jpeg|png|gif|webp|svg)(\?|#|$)/i;
+      const results = [];
+
+      const images = document.querySelectorAll('img[alt]');
+      for (let i = 0; i < images.length && results.length < 40; i++) {
+        const img = images[i];
+        const altRaw = img.getAttribute('alt') || '';
+        const alt = altRaw.trim();
+        if (!alt) continue; // empty alt can be intentional for decorative images
+
+        const srcRaw = (img.getAttribute('src') || '').trim();
+        const altLower = alt.toLowerCase();
+
+        const looksLikeFilename = extensionPattern.test(altLower);
+        const matchesSrc = srcRaw !== '' && altLower === srcRaw.toLowerCase();
+        const isPlaceholder = placeholderWords.has(altLower);
+
+        if (looksLikeFilename || matchesSrc || isPlaceholder) {
+          const id = img.id ? '#' + img.id : '';
+          const cls = img.className ? '.' + img.className.toString().trim().split(/\s+/)[0] : '';
+          results.push({
+            selector: `img${id}${cls}`,
+            html: img.outerHTML.substring(0, 300),
+            alt,
+          });
+        }
+      }
+
+      return results;
+    });
+
+    if (suspicious.length === 0) return null;
+
+    return {
+      rule: 'suspicious-alt-text',
+      engine: 'custom',
+      severity: 'moderate',
+      wcag: '1.1.1',
+      wcagTags: ['wcag111'],
+      description: `${suspicious.length} Bild(er) mit potenziell nichtssagendem Alternativtext`,
+      nodes: suspicious.map(s => ({
+        selector: s.selector,
+        html: s.html,
+        failureSummary: `Das Alternativattribut wirkt nicht aussagekraeftig ("${s.alt}"). Es koennte ein Dateiname oder Platzhalter sein.`,
+      })),
+    };
+  } catch (err) {
+    console.log(`    Suspicious alt test error: ${err.message}`);
+    return null;
+  }
+}
+
+// 1.3.1 / 3.3.2 (heuristic) Labels with "for" that points to no existing input id
+async function testOrphanedLabels(page) {
+  try {
+    const orphaned = await page.evaluate(() => {
+      const results = [];
+      const labels = document.querySelectorAll('label[for]');
+
+      for (let i = 0; i < labels.length && results.length < 50; i++) {
+        const label = labels[i];
+        const forValue = (label.getAttribute('for') || '').trim();
+        if (!forValue || document.getElementById(forValue) === null) {
+          const id = label.id ? '#' + label.id : '';
+          const cls = label.className ? '.' + label.className.toString().trim().split(/\s+/)[0] : '';
+          results.push({
+            selector: `label${id}${cls}`,
+            html: label.outerHTML.substring(0, 300),
+            forValue,
+          });
+        }
+      }
+
+      return results;
+    });
+
+    if (orphaned.length === 0) return null;
+
+    return {
+      rule: 'orphaned-label',
+      engine: 'custom',
+      severity: 'serious',
+      wcag: '1.3.1 / 3.3.2',
+      wcagTags: ['wcag131', 'wcag332'],
+      description: `${orphaned.length} Label(s) ohne gueltige Zuordnung zu einem Formularelement`,
+      nodes: orphaned.map(o => ({
+        selector: o.selector,
+        html: o.html,
+        failureSummary: `Das Label verweist mit for="${o.forValue || '(leer)'}" auf kein existierendes Formularelement.`,
+      })),
+    };
+  } catch (err) {
+    console.log(`    Orphaned label test error: ${err.message}`);
+    return null;
+  }
+}
+
+// Best practice: avoid justified paragraph text due to readability concerns
+async function testJustifiedText(page) {
+  try {
+    const justified = await page.evaluate(() => {
+      const results = [];
+      const candidates = document.querySelectorAll('p, div, article, section');
+
+      for (let i = 0; i < candidates.length && results.length < 40; i++) {
+        const el = candidates[i];
+        const text = (el.textContent || '').trim();
+        if (text.length < 40) continue;
+
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+
+        const style = window.getComputedStyle(el);
+        if (style.textAlign === 'justify') {
+          const tag = el.tagName.toLowerCase();
+          const id = el.id ? '#' + el.id : '';
+          const cls = el.className ? '.' + el.className.toString().trim().split(/\s+/)[0] : '';
+          results.push({
+            selector: `${tag}${id}${cls}`,
+            html: el.outerHTML.substring(0, 300),
+          });
+        }
+      }
+
+      return results;
+    });
+
+    if (justified.length === 0) return null;
+
+    return {
+      rule: 'justified-text',
+      engine: 'custom',
+      severity: 'minor',
+      description: `${justified.length} Textelement(e) mit Blocksatz (text-align: justify)`,
+      nodes: justified.map(j => ({
+        selector: j.selector,
+        html: j.html,
+        failureSummary: 'Die Verwendung von Blocksatz (text-align: justify) kann die Lesbarkeit beeintraechtigen und sollte vermieden werden.',
+      })),
+    };
+  } catch (err) {
+    console.log(`    Justified text test error: ${err.message}`);
+    return null;
+  }
+}
+
+// Heuristic: adjacent sibling links with same href and same visible text
+async function testRedundantLinks(page) {
+  try {
+    const redundant = await page.evaluate(() => {
+      const results = [];
+      const links = document.querySelectorAll('a[href]');
+
+      for (let i = 0; i < links.length && results.length < 50; i++) {
+        const link = links[i];
+        const next = link.nextElementSibling;
+        if (!next || next.tagName.toLowerCase() !== 'a') continue;
+
+        const nextLink = next;
+        const hrefA = (link.href || '').trim();
+        const hrefB = (nextLink.href || '').trim();
+        if (!hrefA || hrefA !== hrefB) continue;
+
+        const textA = (link.textContent || '').replace(/\s+/g, ' ').trim();
+        const textB = (nextLink.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!textA || textA !== textB) continue;
+
+        const id = nextLink.id ? '#' + nextLink.id : '';
+        const cls = nextLink.className ? '.' + nextLink.className.toString().trim().split(/\s+/)[0] : '';
+        results.push({
+          selector: `a${id}${cls}`,
+          html: nextLink.outerHTML.substring(0, 300),
+          text: textB,
+          href: hrefB,
+        });
+      }
+
+      return results;
+    });
+
+    if (redundant.length === 0) return null;
+
+    return {
+      rule: 'redundant-link',
+      engine: 'custom',
+      severity: 'moderate',
+      description: `${redundant.length} redundante, direkt aufeinanderfolgende Links erkannt`,
+      nodes: redundant.map(r => ({
+        selector: r.selector,
+        html: r.html,
+        failureSummary: `Redundanter Link: Ziel "${r.href}" und Linktext "${r.text}" wiederholen den unmittelbar vorherigen Link.`,
+      })),
+    };
+  } catch (err) {
+    console.log(`    Redundant link test error: ${err.message}`);
+    return null;
+  }
+}
+
 // ============================================================
 // COMBINED PAGE SCANNER
 // ============================================================
@@ -904,6 +1169,9 @@ async function scanPage(page, url, allTitles) {
   const focusResult = await testFocusIndicators(page);
   if (focusResult) customIssues.push(focusResult);
 
+  const keyboardTrapResult = await testKeyboardTraps(page);
+  if (keyboardTrapResult) customIssues.push(keyboardTrapResult);
+
   const headingResult = await testHeadingHierarchy(page);
   if (headingResult) customIssues.push(headingResult);
 
@@ -918,6 +1186,18 @@ async function scanPage(page, url, allTitles) {
 
   const { title, issue: titleIssue } = await testPageTitle(page, allTitles);
   if (titleIssue) customIssues.push(titleIssue);
+
+  const suspiciousAltResult = await testSuspiciousAltText(page);
+  if (suspiciousAltResult) customIssues.push(suspiciousAltResult);
+
+  const orphanedLabelsResult = await testOrphanedLabels(page);
+  if (orphanedLabelsResult) customIssues.push(orphanedLabelsResult);
+
+  const justifiedTextResult = await testJustifiedText(page);
+  if (justifiedTextResult) customIssues.push(justifiedTextResult);
+
+  const redundantLinksResult = await testRedundantLinks(page);
+  if (redundantLinksResult) customIssues.push(redundantLinksResult);
 
   // Merge all issues
   const allIssues = [
