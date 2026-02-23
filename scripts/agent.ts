@@ -598,6 +598,9 @@ export async function runAgentEvaluation(
   const QUALITATIVE_REVIEW_WCAG = new Set(['1.1.1', '1.3.1']);
 
   for (const check of manualChecks) {
+    if (check.autoPassIfEmpty === true) {
+      continue;
+    }
     const task = check.task || check.label || check.rule;
     const wcagCandidates = findRelevantCandidates(allIssues, check.wcag);
     const ruleCandidates = allIssues

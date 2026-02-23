@@ -382,7 +382,6 @@ function evaluateManualChecks(
   checks: ManualCheckDefinition[],
   aiEvaluated: boolean,
 ): ManualCheckResult[] {
-  const AUTO_PASS_TECHNICAL_WCAG = new Set(['3.1.1', '2.4.2', '2.1.2']);
   const QUALITATIVE_REVIEW_WCAG = new Set(['1.1.1', '1.3.1']);
 
   const toEvidenceNode = (
@@ -506,12 +505,11 @@ function evaluateManualChecks(
       };
     }
 
-    const relevantCandidates = dedupeEvidenceNodes(reviewEvidenceNodes, 20);
-    const hasRelevantCandidates = relevantCandidates.length > 0;
-    const isTechnicalAutoPassCriterion = AUTO_PASS_TECHNICAL_WCAG.has(check.wcag);
+    const nodes = dedupeEvidenceNodes(reviewEvidenceNodes, 20);
+    const hasRelevantCandidates = nodes.length > 0;
     const isQualitativeCriterion = QUALITATIVE_REVIEW_WCAG.has(check.wcag);
 
-    if (!hasRelevantCandidates && isTechnicalAutoPassCriterion) {
+    if (nodes.length === 0 && check.autoPassIfEmpty === true) {
       return {
         id: check.id,
         rule: check.rule,
@@ -521,7 +519,7 @@ function evaluateManualChecks(
         appliesTo: check.appliesTo,
         wcag_criteria: [check.wcag],
         status: 'Pass',
-        status_label: 'Auto-Pass (Keine technischen Verstöße gefunden)',
+        status_label: 'Automatisch verifiziert (Keine technischen Auffälligkeiten)',
         description: 'Keine relevanten technischen Verstoesse im automatischen Scan gefunden.',
         agent_descriptions: ['Die automatisierte Prüfung hat keine relevanten Verstöße für dieses Kriterium identifiziert. Eine manuelle Stichprobe ist optional.'],
         nodes: [],
@@ -852,13 +850,14 @@ async function main() {
       timeoutPromise,
     ]);
     const openaiApiKey = process.env.OPENAI_API_KEY;
+    const checksForAgent = manualChecks.filter((check) => check.autoPassIfEmpty !== true);
     let enrichedScanResult: RawScanResult = scanResult;
 
     if (!openaiApiKey) {
       console.warn('  Warnung: OPENAI_API_KEY fehlt - LLM-Agent wird uebersprungen.');
     } else {
       console.log('  LLM-Agent: Starte semantische Nachpruefung...');
-      enrichedScanResult = await runAgentEvaluation(scanResult, openaiApiKey, manualChecks);
+      enrichedScanResult = await runAgentEvaluation(scanResult, openaiApiKey, checksForAgent);
       console.log('  LLM-Agent: Nachpruefung abgeschlossen.');
     }
 

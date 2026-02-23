@@ -4,7 +4,7 @@ export type ManualCheckCategory =
   | 'Inhalte & Verstaendlichkeit'
   | 'Formulare & Eingaben';
 
-export interface ManualCheckDefinition {
+export interface ManualCheck {
   id: string;
   rule: string;
   category: ManualCheckCategory;
@@ -12,7 +12,10 @@ export interface ManualCheckDefinition {
   appliesTo: Array<'incomplete' | 'suspicious-alt-text'>;
   task: string;
   label?: string;
+  autoPassIfEmpty?: boolean;
 }
+
+export type ManualCheckDefinition = ManualCheck;
 
 // Gemeinsame Referenz fuer manuelle/semantische Checks.
 // Wird von scan.ts an den LLM-Agenten uebergeben.
@@ -43,6 +46,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     appliesTo: ['incomplete'],
     task: 'Gibt es keine Tastaturfalle und ist die Navigation per Tastatur durchgaengig moeglich?',
     label: 'Keine Tastaturfalle',
+    autoPassIfEmpty: true,
   },
   {
     id: 'mc-page-title-242',
@@ -52,6 +56,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     appliesTo: ['incomplete'],
     task: 'Sind Seitentitel vorhanden, eindeutig und beschreiben den Seiteninhalt?',
     label: 'Seitentitel vorhanden und eindeutig',
+    autoPassIfEmpty: true,
   },
   {
     id: 'mc-heading-hierarchy-131',
@@ -70,6 +75,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     appliesTo: ['incomplete'],
     task: 'Ist die Hauptsprache der Seite korrekt ausgezeichnet?',
     label: 'Sprache der Seite',
+    autoPassIfEmpty: true,
   },
   {
     id: 'mc-html-lang-312',
@@ -79,6 +85,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     appliesTo: ['incomplete'],
     task: 'Sind abweichende Sprachabschnitte innerhalb der Seite korrekt markiert?',
     label: 'Sprache einzelner Textteile',
+    autoPassIfEmpty: true,
   },
   {
     id: 'mc-text-spacing-1412',
@@ -88,6 +95,7 @@ export const manualChecks: ManualCheckDefinition[] = [
     appliesTo: ['incomplete'],
     task: 'Bleibt der Inhalt bei angepassten Textabstaenden vollstaendig nutzbar?',
     label: 'Textabstaende ohne Inhaltsverlust',
+    autoPassIfEmpty: true,
   },
   {
     id: 'mc-reduced-motion-231',
