@@ -15,6 +15,8 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { scan } from '../scanner.js';
+import { runAgentEvaluation } from './agent.js';
+import { manualChecks, type ManualCheckDefinition } from './manual-checks.js';
 import { writeFileSync, mkdirSync } from 'fs';
 
 // --- Types ---
@@ -28,6 +30,20 @@ interface Finding {
   element_count: number;
   example_html: string;
   example_url: string;
+}
+
+type ComplianceStatus = 'Pass' | 'Fail' | 'Needs Human Review';
+
+interface ManualCheckResult {
+  id: string;
+  rule: string;
+  category: string;
+  wcag_criteria: string[];
+  status: ComplianceStatus;
+  status_label: string;
+  description: string;
+  agent_descriptions: string[];
+  affected_pages: string[];
 }
 
 interface CliArgs {
@@ -154,6 +170,7 @@ function extractWcagCriteria(tags: string[]): string[] {
 interface RawIssue {
   rule: string;
   severity: string;
+  engine?: string;
   description: string;
   help?: string;
   helpUrl?: string;
@@ -178,6 +195,7 @@ interface RawScanResult {
   totalIssues: number;
   score: number;
   pages: RawPage[];
+  manual_checks?: ManualCheckResult[];
 }
 
 function deduplicateFindings(pages: RawPage[]): Finding[] {
@@ -236,6 +254,109 @@ function deduplicateFindings(pages: RawPage[]): Finding[] {
   return [...map.values()];
 }
 
+function getIssueWcagCriteria(issue: RawIssue): string[] {
+  const fromTags = extractWcagCriteria(issue.wcagTags || []);
+  if (fromTags.length > 0) return fromTags;
+  if (!issue.wcag) return [];
+
+  const values: string[] = [];
+  for (const sc of issue.wcag.split('/').map((s) => s.trim())) {
+    if (sc && !values.includes(sc)) values.push(sc);
+  }
+  return values;
+}
+
+function evaluateManualChecks(
+  pages: RawPage[],
+  checks: ManualCheckDefinition[],
+  aiEvaluated: boolean,
+): ManualCheckResult[] {
+  return checks.map((check) => {
+    const failPages = new Set<string>();
+    const failDescriptions: string[] = [];
+    let hasApplicableCandidates = false;
+
+    for (const page of pages) {
+      const pageIssues = Array.isArray(page.issues) ? page.issues : [];
+      const pageIncomplete = Array.isArray(page.incomplete) ? page.incomplete : [];
+
+      if (check.appliesTo.includes('suspicious-alt-text')) {
+        const hasSuspiciousCandidates = pageIssues.some((i) => i.rule === 'suspicious-alt-text');
+        if (hasSuspiciousCandidates) hasApplicableCandidates = true;
+      }
+
+      if (check.appliesTo.includes('incomplete')) {
+        const relevantIncomplete = pageIncomplete.filter((issue) => {
+          const wcagList = getIssueWcagCriteria(issue);
+          if (wcagList.length === 0) return true;
+          return wcagList.includes(check.wcag);
+        });
+        if (relevantIncomplete.length > 0) {
+          hasApplicableCandidates = true;
+        }
+      }
+
+      const llmFails = pageIssues.filter((issue) => {
+        if (issue.engine !== 'llm-agent') return false;
+        const wcagList = getIssueWcagCriteria(issue);
+        return wcagList.includes(check.wcag);
+      });
+
+      if (llmFails.length > 0) {
+        failPages.add(page.url);
+        for (const issue of llmFails) {
+          const text = (issue.description || '').trim();
+          if (text && !failDescriptions.includes(text)) {
+            failDescriptions.push(text);
+          }
+        }
+      }
+    }
+
+    if (failDescriptions.length > 0) {
+      return {
+        id: check.id,
+        rule: check.rule,
+        category: check.category,
+        wcag_criteria: [check.wcag],
+        status: 'Fail',
+        status_label: 'Fail',
+        description: 'Agent hat einen Verstoess zu diesem Check erkannt.',
+        agent_descriptions: failDescriptions,
+        affected_pages: [...failPages],
+      };
+    }
+
+    if (aiEvaluated && hasApplicableCandidates) {
+      return {
+        id: check.id,
+        rule: check.rule,
+        category: check.category,
+        wcag_criteria: [check.wcag],
+        status: 'Pass',
+        status_label: 'Verified by AI - Pass',
+        description: 'Kein Verstoess erkannt.',
+        agent_descriptions: [],
+        affected_pages: [],
+      };
+    }
+
+    return {
+      id: check.id,
+      rule: check.rule,
+      category: check.category,
+      wcag_criteria: [check.wcag],
+      status: 'Needs Human Review',
+      status_label: 'Needs Human Review',
+      description: hasApplicableCandidates
+        ? 'Automatische Bewertung nicht eindeutig, manuelle Pruefung erforderlich.'
+        : 'Fuer diesen Check lagen keine verifizierbaren Kandidaten vor.',
+      agent_descriptions: [],
+      affected_pages: [],
+    };
+  });
+}
+
 // --- Count severities from deduplicated findings ---
 
 function countSeverities(findings: Finding[]) {
@@ -250,6 +371,23 @@ function countSeverities(findings: Finding[]) {
     }
   }
   return { critical, serious, moderate, minor };
+}
+
+function calculateManualCheckPenalty(
+  checks: ManualCheckResult[],
+  findings: Finding[],
+): number {
+  const findingWcag = new Set(findings.flatMap((f) => f.wcag_criteria || []));
+  let penalty = 0;
+  for (const check of checks) {
+    if (check.status !== 'Fail') continue;
+    const wcag = check.wcag_criteria[0];
+    if (!wcag || findingWcag.has(wcag)) continue;
+    // Fallback: falls ein Agent-Fail nicht in deduplizierten Findings gelandet ist,
+    // geben wir denselben Basispunktabzug wie bei einem moderaten Finding.
+    penalty += 3;
+  }
+  return penalty;
 }
 
 // --- Supabase Update Helpers ---
@@ -462,11 +600,26 @@ async function main() {
       scan({ url: targetUrl, maxPages: effectiveMaxPages }) as Promise<RawScanResult>,
       timeoutPromise,
     ]);
-    const finalScanResult: RawScanResult = scanResult;
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    let enrichedScanResult: RawScanResult = scanResult;
+
+    if (!openaiApiKey) {
+      console.warn('  Warnung: OPENAI_API_KEY fehlt - LLM-Agent wird uebersprungen.');
+    } else {
+      console.log('  LLM-Agent: Starte semantische Nachpruefung...');
+      enrichedScanResult = await runAgentEvaluation(scanResult, openaiApiKey, manualChecks);
+      console.log('  LLM-Agent: Nachpruefung abgeschlossen.');
+    }
+
+    const finalScanResult: RawScanResult = enrichedScanResult;
+
+    finalScanResult.manual_checks = evaluateManualChecks(finalScanResult.pages, manualChecks, Boolean(openaiApiKey));
 
     // Findings deduplizieren
-    const findings = deduplicateFindings(finalScanResult.pages);
-    const score = calculateScore(findings);
+    const findings = deduplicateFindings(enrichedScanResult.pages);
+    const baseScore = calculateScore(findings);
+    const manualPenalty = calculateManualCheckPenalty(finalScanResult.manual_checks, findings);
+    const score = Math.max(0, baseScore - manualPenalty);
     const counts = countSeverities(findings);
     const pagesScannedUrls = finalScanResult.pages.map((p: RawPage) => p.url);
 
@@ -487,6 +640,7 @@ async function main() {
         ...counts,
         total_findings: findings.reduce((sum, f) => sum + f.element_count, 0),
         findings,
+        manual_checks: finalScanResult.manual_checks,
         warning: warningMessage,
       };
       writeFileSync(outputPath, JSON.stringify(output, null, 2));

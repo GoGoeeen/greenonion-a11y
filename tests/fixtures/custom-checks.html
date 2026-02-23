@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Custom Check Fixture</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 24px;
+      }
+      .justified {
+        text-align: justify;
+        max-width: 520px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Fixture fuer neue Custom Checks</h1>
+
+    <section>
+      <h2>suspicious-alt-text</h2>
+      <img src="/assets/hero.jpg" alt="hero.jpg" width="120" height="80" />
+    </section>
+
+    <section>
+      <h2>orphaned-label</h2>
+      <label for="missing-input-id">Vorname</label>
+      <input id="first-name" type="text" />
+    </section>
+
+    <section>
+      <h2>justified-text</h2>
+      <p class="justified">
+        Dieser Absatz ist absichtlich lang genug und nutzt bewusst Blocksatz, damit
+        der Scanner den Check fuer text-align justify verlässlich ausloesen kann.
+        Der Textinhalt ist nur fuer den Testfall bestimmt.
+      </p>
+    </section>
+
+    <section>
+      <h2>redundant-link</h2>
+      <a href="/ziel">Mehr erfahren</a><a href="/ziel">Mehr erfahren</a>
+    </section>
+  </body>
+</html>

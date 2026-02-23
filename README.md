@@ -128,6 +128,18 @@ node report.js scan_example.com_1234.json "Musterfirma GmbH" bericht.pdf
 node batch-scan.js searchresults.csv --output ./reports --max-pages 5 --delay 5
 ```
 
+### Custom-Checks verifizieren
+
+```bash
+npm run test:custom-checks
+npm run test:all-custom-checks
+```
+
+Startet eine lokale Fixture-Seite und prueft, ob die vier WAVE-inspirierten Custom-Regeln erkannt werden:
+`suspicious-alt-text`, `orphaned-label`, `justified-text`, `redundant-link`.
+
+`test:all-custom-checks` validiert alle implementierten Custom Checks per lokaler Test-Sitemap.
+
 ## npm Scripts
 
 | Script | Befehl | Beschreibung |

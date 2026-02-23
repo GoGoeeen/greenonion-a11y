@@ -9,19 +9,22 @@
     "scan:legacy": "node scanner.js",
     "report": "node report.js",
     "fix": "node wp-adapter.js",
-    "batch": "node batch-scan.js"
+    "batch": "node batch-scan.js",
+    "test:custom-checks": "node scripts/verify-custom-checks.js",
+    "test:all-custom-checks": "node scripts/verify-all-custom-checks.js"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.0",
     "@supabase/supabase-js": "^2.49.0",
     "dotenv": "^16.4.0",
+    "openai": "^6.22.0",
     "pg": "^8.18.0",
     "playwright": "^1.49.0",
     "puppeteer": "^23.0.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "tsx": "^4.19.0"
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

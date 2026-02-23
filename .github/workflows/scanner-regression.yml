@@ -1,0 +1,28 @@
+name: Scanner Regression
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify-custom-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - run: npx playwright install chromium --with-deps
+
+      - name: Verify all custom scanner checks
+        run: npm run test:all-custom-checks
