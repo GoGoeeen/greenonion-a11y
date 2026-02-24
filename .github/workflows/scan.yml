@@ -36,14 +36,6 @@ jobs:
 
       - run: npx playwright install chromium --with-deps
 
-      - name: Debug OPENAI_API_KEY
-        run: |
-          echo "Key is empty: ${{ secrets.OPENAI_API_KEY == '' }}"
-          echo "Key length: ${#KEY}"
-          echo "First 4 chars: ${KEY:0:4}"
-        env:
-          KEY: ${{ secrets.OPENAI_API_KEY }}
-
       - name: Run accessibility scan
         run: |
           npm run scan -- \
