@@ -16,7 +16,7 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    const { clientId, domain } = await req.json()
+    const { clientId, domain, max_pages } = await req.json()
 
     if (!clientId || !domain) {
       throw new Error('Missing clientId or domain')
@@ -30,6 +30,7 @@ Deno.serve(async (req) => {
         domain: domain,
         status: 'pending',
         scanned_at: new Date().toISOString(),
+        max_pages: max_pages || 10,
         results: {}
       })
       .select('id')
