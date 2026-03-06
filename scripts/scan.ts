@@ -760,12 +760,12 @@ async function main() {
   const rawDomain = args.domain;
   const clientId = args['client-id'];
   const scanId = args['scan-id'];
-  const maxPages = parseInt(args['max-pages'] || '5', 10);
+  const maxPages = parseInt(args['max-pages'] || '10', 10);
   const isLocal = args.local === true;
 
   if (!rawDomain) {
     console.error('Fehler: --domain ist erforderlich');
-    console.error('Usage: tsx scripts/scan.ts --domain example.com [--client-id UUID] [--scan-id UUID] [--max-pages 5] [--local]');
+    console.error('Usage: tsx scripts/scan.ts --domain example.com [--client-id UUID] [--scan-id UUID] [--max-pages 10] [--local]');
     process.exit(1);
   }
 
@@ -807,10 +807,10 @@ async function main() {
     await updateScanStatus(supabase, scanId, 'running');
   }
 
-  // Gesamt-Timeout: 5 Minuten
-  const timeoutMs = 5 * 60 * 1000;
+  // Gesamt-Timeout: 10 Minuten
+  const timeoutMs = 10 * 60 * 1000;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Scan-Timeout: 5 Minuten ueberschritten')), timeoutMs);
+    setTimeout(() => reject(new Error('Scan-Timeout: 10 Minuten ueberschritten')), timeoutMs);
   });
 
   try {

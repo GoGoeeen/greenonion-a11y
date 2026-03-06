@@ -4,7 +4,7 @@ import { parseStringPromise } from 'xml2js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 
 // --- Configuration ---
-const DEFAULT_MAX_PAGES = 50;
+const DEFAULT_MAX_PAGES = 10;
 const SEVERITY_WEIGHTS = { critical: 10, serious: 5, moderate: 2, minor: 1 };
 const HTMLCS_CDN = 'https://squizlabs.github.io/HTML_CodeSniffer/build/HTMLCS.js';
 
@@ -416,12 +416,11 @@ function deduplicateIssues(axeIssues, htmlcsIssues) {
 // ============================================================
 
 // 1.4.10 Reflow — Test bei 320px CSS-Breite
-async function testReflow(page, url) {
+async function testReflow(page) {
   const originalViewport = page.viewportSize();
   try {
     await page.setViewportSize({ width: 320, height: 568 });
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
 
     const result = await page.evaluate(() => {
       const vw = document.documentElement.clientWidth;
@@ -841,7 +840,7 @@ async function testLanguage(page) {
 }
 
 // 2.4.2 Page Title — unique and descriptive
-async function testPageTitle(page, allTitles) {
+async function testPageTitle(page) {
   try {
     const title = await page.title();
     const issues = [];
@@ -852,12 +851,6 @@ async function testPageTitle(page, allTitles) {
         html: '<title></title>',
         failureSummary: 'Seite hat keinen Titel',
       });
-    } else if (allTitles && allTitles.filter(t => t === title).length > 1) {
-      issues.push({
-        selector: 'head > title',
-        html: `<title>${title}</title>`,
-        failureSummary: `Identischer Seitentitel auf mehreren Seiten: "${title}"`,
-      });
     }
 
     if (issues.length === 0) return { title, issue: null };
@@ -865,12 +858,12 @@ async function testPageTitle(page, allTitles) {
     return {
       title,
       issue: {
-        rule: 'page-title-unique',
+        rule: 'page-title-empty',
         engine: 'custom',
         severity: 'moderate',
         wcag: '2.4.2',
         wcagTags: ['wcag242'],
-        description: 'Seitentitel fehlt oder ist nicht eindeutig',
+        description: 'Seitentitel fehlt',
         nodes: issues,
       },
     };
@@ -1154,7 +1147,7 @@ async function testRedundantLinks(page) {
 // ============================================================
 // COMBINED PAGE SCANNER
 // ============================================================
-async function scanPage(page, url, allTitles) {
+async function scanPage(page, url) {
   console.log(`    [axe-core] Scanning...`);
   const { violations: axeViolations, incomplete: axeIncomplete } = await scanPageAxe(page, url);
 
@@ -1184,7 +1177,7 @@ async function scanPage(page, url, allTitles) {
   const textSpacingResult = await testTextSpacing(page);
   if (textSpacingResult) customIssues.push(textSpacingResult);
 
-  const { title, issue: titleIssue } = await testPageTitle(page, allTitles);
+  const { title, issue: titleIssue } = await testPageTitle(page);
   if (titleIssue) customIssues.push(titleIssue);
 
   const suspiciousAltResult = await testSuspiciousAltText(page);
@@ -1198,6 +1191,9 @@ async function scanPage(page, url, allTitles) {
 
   const redundantLinksResult = await testRedundantLinks(page);
   if (redundantLinksResult) customIssues.push(redundantLinksResult);
+
+  const reflowResult = await testReflow(page);
+  if (reflowResult) customIssues.push(reflowResult);
 
   // Merge all issues
   const allIssues = [
@@ -1271,20 +1267,8 @@ export async function scan({ url, maxPages = DEFAULT_MAX_PAGES, auth = null, log
 
   urls = urls.slice(0, maxPages);
 
-  // Step 2: First pass — collect all page titles for duplicate detection
-  console.log('\n  Phase 1: Collecting page titles...');
-  const allTitles = [];
-  for (const pageUrl of urls) {
-    try {
-      await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      allTitles.push(await page.title());
-    } catch {
-      allTitles.push('');
-    }
-  }
-
-  // Step 3: Full scan per page (axe + HTMLCS + custom)
-  console.log('\n  Phase 2: Full accessibility scan...\n');
+  // Step 2: Full scan per page (axe + HTMLCS + custom)
+  console.log('\n  Phase 1: Full accessibility scan...\n');
   const pages = [];
   let totalIssues = 0;
   let totalIncomplete = 0;
@@ -1294,7 +1278,7 @@ export async function scan({ url, maxPages = DEFAULT_MAX_PAGES, auth = null, log
     const pageUrl = urls[i];
     console.log(`  [${i + 1}/${urls.length}] ${pageUrl}`);
 
-    const result = await scanPage(page, pageUrl, allTitles);
+    const result = await scanPage(page, pageUrl);
     const issueCount = result.issues.reduce((sum, iss) => sum + (iss.nodes?.length || 1), 0);
     const incompleteCount = result.incomplete.reduce((sum, iss) => sum + (iss.nodes?.length || 1), 0);
 
@@ -1317,17 +1301,28 @@ export async function scan({ url, maxPages = DEFAULT_MAX_PAGES, auth = null, log
     console.log(`    => ${issueCount} violations, ${incompleteCount} needs-review (axe:${result.engineStats.axe} htmlcs:${result.engineStats.htmlcs} custom:${result.engineStats.custom})`);
   }
 
-  // Step 4: Reflow test (separate pass, changes viewport)
-  console.log('\n  Phase 3: Reflow-Test (320px)...\n');
-  for (let i = 0; i < urls.length; i++) {
-    const reflowResult = await testReflow(page, urls[i]);
-    if (reflowResult) {
-      pages[i].issues.push(reflowResult);
-      const nodeCount = reflowResult.nodes?.length || 1;
+  // Step 3: Check for duplicate page titles
+  const allTitles = pages.map(p => p.title);
+  for (let i = 0; i < pages.length; i++) {
+    const t = pages[i].title;
+    if (t && t.trim() !== '' && allTitles.filter(x => x === t).length > 1) {
+      const nodeCount = 1;
+      pages[i].issues.push({
+        rule: 'page-title-unique',
+        engine: 'custom',
+        severity: 'moderate',
+        wcag: '2.4.2',
+        wcagTags: ['wcag242'],
+        description: 'Seitentitel ist nicht eindeutig',
+        nodes: [{
+          selector: 'head > title',
+          html: `<title>${t}</title>`,
+          failureSummary: `Identischer Seitentitel auf mehreren Seiten: "${t}"`,
+        }],
+      });
       pages[i].issueCount += nodeCount;
       totalIssues += nodeCount;
       engineTotals.custom++;
-      console.log(`  [${i + 1}/${urls.length}] ${urls[i]} => ${nodeCount} Reflow-Probleme`);
     }
   }
 
