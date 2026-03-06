@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
             domain: domain,
             client_id: client_id,
             scan_id: scan_id,
-            max_pages: String(max_pages || 20),
+            max_pages: String(max_pages || 10),
           },
         }),
       }
