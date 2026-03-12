@@ -2,10 +2,10 @@ import { chromium } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { parseStringPromise } from 'xml2js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { calculateAccessibilityScore, deduplicateFindingsFromPages } from './scripts/accessibility-score.js';
 
 // --- Configuration ---
 const DEFAULT_MAX_PAGES = 10;
-const SEVERITY_WEIGHTS = { critical: 10, serious: 5, moderate: 2, minor: 1 };
 const HTMLCS_CDN = 'https://squizlabs.github.io/HTML_CodeSniffer/build/HTMLCS.js';
 
 // --- Cookie-Banner Dismissal ---
@@ -1216,15 +1216,11 @@ async function scanPage(page, url) {
 
 // --- Compliance Score ---
 function calculateScore(pages) {
-  let totalWeighted = 0;
-  for (const p of pages) {
-    for (const issue of p.issues) {
-      const nodeCount = issue.nodes?.length || 1;
-      const weight = SEVERITY_WEIGHTS[issue.severity] || 1;
-      totalWeighted += weight * nodeCount;
-    }
-  }
-  return Math.max(0, 100 - totalWeighted);
+  const findings = deduplicateFindingsFromPages(pages);
+  return calculateAccessibilityScore({
+    findings,
+    pages_scanned: Array.isArray(pages) ? pages.length : 0,
+  });
 }
 
 // --- Main ---

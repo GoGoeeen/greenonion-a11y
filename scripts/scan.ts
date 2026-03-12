@@ -17,6 +17,11 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { scan } from '../scanner.js';
 import { runAgentEvaluation } from './agent.js';
 import { manualChecks, type ManualCheckDefinition } from './manual-checks.js';
+import {
+  deduplicateFindingsFromPages,
+  deriveAccessibilityScoreMetrics,
+  extractWcagCriteria,
+} from './accessibility-score.js';
 import { writeFileSync, mkdirSync } from 'fs';
 
 // --- Types ---
@@ -146,34 +151,6 @@ async function checkRobotsTxt(baseUrl: string): Promise<{ allowed: boolean; warn
     return { allowed: true };
   }
 }
-
-// --- Score Calculation (deduplizierte Findings) ---
-
-function calculateScore(findings: Finding[]): number {
-  const weights: Record<string, number> = { critical: 15, serious: 8, moderate: 3, minor: 1 };
-  let penalty = 0;
-  for (const f of findings) {
-    const weight = weights[f.severity] ?? 1;
-    penalty += weight * Math.min(f.element_count, 10);
-  }
-  return Math.max(0, Math.round(100 - (penalty / 200) * 100));
-}
-
-// --- WCAG-Tag Extraction ---
-
-function extractWcagCriteria(tags: string[]): string[] {
-  const criteria: string[] = [];
-  for (const tag of tags) {
-    // z.B. 'wcag412' → '4.1.2', 'wcag131' → '1.3.1'
-    const match = tag.match(/^wcag(\d)(\d)(\d+)$/);
-    if (match) {
-      criteria.push(`${match[1]}.${match[2]}.${match[3]}`);
-    }
-  }
-  return criteria;
-}
-
-// --- Deduplicate Findings Across Pages ---
 
 interface RawIssue {
   rule: string;
@@ -307,62 +284,6 @@ function mergeManualCheckEvidence(
       affected_pages: dedupeStrings([...(check.affected_pages || []), ...mergedNodes.map((n) => n.url)]),
     };
   });
-}
-
-function deduplicateFindings(pages: RawPage[]): Finding[] {
-  const map = new Map<string, Finding>();
-
-  for (const page of pages) {
-    for (const issue of page.issues) {
-      // Skip error markers
-      if (issue.rule === '_error') continue;
-
-      const key = issue.rule;
-      const existing = map.get(key);
-
-      const nodeCount = issue.nodes?.length || 1;
-      const wcagTags = issue.wcagTags || [];
-      const wcagCriteria = extractWcagCriteria(wcagTags);
-
-      // Wenn wcag-Feld direkt vorhanden (z.B. bei Custom Checks)
-      if (issue.wcag && wcagCriteria.length === 0) {
-        for (const sc of issue.wcag.split('/').map(s => s.trim())) {
-          if (sc && !wcagCriteria.includes(sc)) {
-            wcagCriteria.push(sc);
-          }
-        }
-      }
-
-      const exampleNode = issue.nodes?.[0];
-      const exampleHtml = (exampleNode?.html || '').substring(0, 200);
-
-      if (existing) {
-        existing.element_count += nodeCount;
-        if (!existing.affected_pages.includes(page.url)) {
-          existing.affected_pages.push(page.url);
-        }
-        // Merge WCAG criteria
-        for (const c of wcagCriteria) {
-          if (!existing.wcag_criteria.includes(c)) {
-            existing.wcag_criteria.push(c);
-          }
-        }
-      } else {
-        map.set(key, {
-          rule_id: issue.rule,
-          severity: (issue.severity as Finding['severity']) || 'moderate',
-          wcag_criteria: wcagCriteria,
-          description: issue.description || issue.help || issue.rule,
-          affected_pages: [page.url],
-          element_count: nodeCount,
-          example_html: exampleHtml,
-          example_url: page.url,
-        });
-      }
-    }
-  }
-
-  return [...map.values()];
 }
 
 function getIssueWcagCriteria(issue: RawIssue): string[] {
@@ -601,23 +522,6 @@ function countSeverities(findings: Finding[]) {
     }
   }
   return { critical, serious, moderate, minor };
-}
-
-function calculateManualCheckPenalty(
-  checks: ManualCheckResult[],
-  findings: Finding[],
-): number {
-  const findingWcag = new Set(findings.flatMap((f) => f.wcag_criteria || []));
-  let penalty = 0;
-  for (const check of checks) {
-    if (check.status !== 'Fail') continue;
-    const wcag = check.wcag_criteria[0];
-    if (!wcag || findingWcag.has(wcag)) continue;
-    // Fallback: falls ein Agent-Fail nicht in deduplizierten Findings gelandet ist,
-    // geben wir denselben Basispunktabzug wie bei einem moderaten Finding.
-    penalty += 3;
-  }
-  return penalty;
 }
 
 // --- Supabase Update Helpers ---
@@ -868,12 +772,15 @@ async function main() {
     finalScanResult.manual_checks = mergedManualChecks;
 
     // Findings deduplizieren
-    const findings = deduplicateFindings(enrichedScanResult.pages);
-    const baseScore = calculateScore(findings);
-    const manualPenalty = calculateManualCheckPenalty(finalScanResult.manual_checks, findings);
-    const score = Math.max(0, baseScore - manualPenalty);
+    const findings = deduplicateFindingsFromPages(enrichedScanResult.pages) as Finding[];
+    const scoreMetrics = deriveAccessibilityScoreMetrics({
+      findings,
+      pages_scanned: finalScanResult.pagesScanned,
+    });
+    const score = scoreMetrics.score;
     const counts = countSeverities(findings);
     const pagesScannedUrls = finalScanResult.pages.map((p: RawPage) => p.url);
+    finalScanResult.score = score;
 
     console.log(`\n  Deduplizierte Findings: ${findings.length} Regeln`);
     console.log(`  Score: ${score}/100`);

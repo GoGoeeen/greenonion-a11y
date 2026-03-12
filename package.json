@@ -10,6 +10,7 @@
     "report": "node report.js",
     "fix": "node wp-adapter.js",
     "batch": "node batch-scan.js",
+    "test:score": "node --test tests/accessibility-score.test.js",
     "test:custom-checks": "node scripts/verify-custom-checks.js",
     "test:all-custom-checks": "node scripts/verify-all-custom-checks.js"
   },
