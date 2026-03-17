@@ -8,7 +8,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
  */
 Deno.serve(async (req) => {
   try {
-    const { scan_id, client_id, domain, max_pages } = await req.json()
+    const { scan_id, client_id, domain, max_pages, scan_type } = await req.json()
 
     if (!scan_id || !client_id || !domain) {
       console.error('Missing required fields:', { scan_id, client_id, domain })
@@ -46,6 +46,7 @@ Deno.serve(async (req) => {
             client_id: client_id,
             scan_id: scan_id,
             max_pages: String(max_pages || 10),
+            scan_type: scan_type === 'quick' ? 'quick' : 'full',
           },
         }),
       }

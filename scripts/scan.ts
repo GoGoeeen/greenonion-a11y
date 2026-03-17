@@ -64,6 +64,7 @@ interface CliArgs {
   'client-id'?: string;
   'scan-id'?: string;
   'max-pages'?: string;
+  'scan-type'?: string;
   local?: boolean;
   [key: string]: string | boolean | undefined;
 }
@@ -665,6 +666,7 @@ async function main() {
   const clientId = args['client-id'];
   const scanId = args['scan-id'];
   const maxPages = parseInt(args['max-pages'] || '10', 10);
+  const scanType = args['scan-type'] === 'quick' ? 'quick' : 'full';
   const isLocal = args.local === true;
 
   if (!rawDomain) {
@@ -702,6 +704,7 @@ async function main() {
   console.log(`\n  GreenOnion A11y Scanner — GitHub Actions Mode`);
   console.log(`  Domain: ${targetUrl}`);
   console.log(`  Max Pages: ${maxPages}`);
+  console.log(`  Scan Type: ${scanType}`);
   console.log(`  Mode: ${isLocal ? 'local' : 'supabase'}`);
   if (scanId) console.log(`  Scan ID: ${scanId}`);
   console.log('');
@@ -757,7 +760,9 @@ async function main() {
     const checksForAgent = manualChecks.filter((check) => check.autoPassIfEmpty !== true);
     let enrichedScanResult: RawScanResult = scanResult;
 
-    if (!openaiApiKey) {
+    if (scanType === 'quick') {
+      console.log('  LLM-Agent: Uebersprungen (Quick Scan).');
+    } else if (!openaiApiKey) {
       console.warn('  Warnung: OPENAI_API_KEY fehlt - LLM-Agent wird uebersprungen.');
     } else {
       console.log('  LLM-Agent: Starte semantische Nachpruefung...');

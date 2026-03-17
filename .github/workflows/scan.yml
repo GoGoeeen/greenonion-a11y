@@ -20,6 +20,11 @@ on:
         required: false
         default: '5'
         type: string
+      scan_type:
+        description: 'Scan type: quick (skip LLM) or full'
+        required: false
+        default: 'full'
+        type: string
 
 jobs:
   scan:
@@ -42,7 +47,8 @@ jobs:
             --domain=${{ inputs.domain }} \
             --client-id=${{ inputs.client_id }} \
             --scan-id=${{ inputs.scan_id }} \
-            --max-pages=${{ inputs.max_pages }}
+            --max-pages=${{ inputs.max_pages }} \
+            --scan-type=${{ inputs.scan_type }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
