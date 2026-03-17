@@ -724,10 +724,11 @@ async function main() {
     await updateScanStatus(supabase, scanId, 'running');
   }
 
-  // Gesamt-Timeout: 10 Minuten
-  const timeoutMs = 10 * 60 * 1000;
+  // Gesamt-Timeout: 5 Min. fuer Quick Scan, 10 Min. fuer Full Scan
+  const timeoutMs = scanType === 'quick' ? 5 * 60 * 1000 : 10 * 60 * 1000;
+  const timeoutLabel = scanType === 'quick' ? '5 Minuten' : '10 Minuten';
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Scan-Timeout: 10 Minuten ueberschritten')), timeoutMs);
+    setTimeout(() => reject(new Error(`Scan-Timeout: ${timeoutLabel} ueberschritten`)), timeoutMs);
   });
 
   try {
