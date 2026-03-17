@@ -1224,7 +1224,7 @@ function calculateScore(pages) {
 }
 
 // --- Main ---
-export async function scan({ url, maxPages = DEFAULT_MAX_PAGES, auth = null, loginUrl = null, urlListFile = null }) {
+export async function scan({ url, maxPages = DEFAULT_MAX_PAGES, auth = null, loginUrl = null, urlListFile = null, onProgress = null }) {
   const mode = auth ? 'authenticated' : 'public';
   console.log(`\n  Scanning: ${url} (max ${maxPages} pages, mode: ${mode})\n`);
 
@@ -1295,6 +1295,10 @@ export async function scan({ url, maxPages = DEFAULT_MAX_PAGES, auth = null, log
     });
 
     console.log(`    => ${issueCount} violations, ${incompleteCount} needs-review (axe:${result.engineStats.axe} htmlcs:${result.engineStats.htmlcs} custom:${result.engineStats.custom})`);
+
+    if (onProgress) {
+      try { await onProgress(pages.length, urls.length); } catch { /* ignore */ }
+    }
   }
 
   // Step 3: Check for duplicate page titles

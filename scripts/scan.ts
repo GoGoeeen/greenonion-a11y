@@ -527,6 +527,16 @@ function countSeverities(findings: Finding[]) {
 
 // --- Supabase Update Helpers ---
 
+async function updatePagesScanned(supabase: SupabaseClient, scanId: string, pagesScanned: number) {
+  const { error } = await supabase
+    .from('accessibility_scans')
+    .update({ pages_scanned: pagesScanned, updated_at: new Date().toISOString() })
+    .eq('id', scanId);
+  if (error) {
+    console.error(`  Supabase pages_scanned update failed: ${error.message}`);
+  }
+}
+
 async function updateScanStatus(
   supabase: SupabaseClient,
   scanId: string,
@@ -752,8 +762,14 @@ async function main() {
     }
 
     // Scan ausfuehren (mit Timeout)
+    const progressCallback = (supabase && scanId)
+      ? async (done: number, _total: number) => {
+          await updatePagesScanned(supabase, scanId, done);
+        }
+      : undefined;
+
     const scanResult = await Promise.race([
-      scan({ url: targetUrl, maxPages: effectiveMaxPages }) as Promise<RawScanResult>,
+      scan({ url: targetUrl, maxPages: effectiveMaxPages, onProgress: progressCallback }) as Promise<RawScanResult>,
       timeoutPromise,
     ]);
     const openaiApiKey = process.env.OPENAI_API_KEY;
