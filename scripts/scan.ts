@@ -616,6 +616,30 @@ async function updateScanStatus(
   }
 }
 
+async function assertSingleScanRowExists(supabase: SupabaseClient, scanId: string) {
+  const { data, error } = await supabase
+    .from('accessibility_scans')
+    .select('id')
+    .eq('id', scanId);
+
+  if (error) {
+    throw new Error(`Supabase scan lookup failed: ${error.message}`);
+  }
+
+  const rowCount = data?.length ?? 0;
+  if (rowCount === 0) {
+    throw new Error(
+      `Supabase scan lookup failed: scan_id ${scanId} wurde in accessibility_scans nicht gefunden. Vor dem workflow_dispatch muss die Zeile bereits existieren.`,
+    );
+  }
+
+  if (rowCount > 1) {
+    throw new Error(
+      `Supabase scan lookup failed: scan_id ${scanId} ist in accessibility_scans nicht eindeutig (${rowCount} Treffer).`,
+    );
+  }
+}
+
 async function saveScanResults(
   supabase: SupabaseClient,
   scanId: string,
@@ -682,16 +706,29 @@ async function saveScanResults(
       throw new Error(`Supabase save failed: ${saveError.message}`);
     }
 
-    const { data: verifyRow, error: verifyError } = await supabase
+    const { data: verifyRows, error: verifyError } = await supabase
       .from('accessibility_scans')
       .select('raw_scan_result')
-      .eq('id', scanId)
-      .single();
+      .eq('id', scanId);
 
     if (verifyError) {
       throw new Error(`Supabase verify failed: ${verifyError.message}`);
     }
 
+    const verifyCount = verifyRows?.length ?? 0;
+    if (verifyCount === 0) {
+      throw new Error(
+        `Supabase verify failed: scan_id ${scanId} wurde nach dem Speichern nicht gefunden. Wahrscheinlich existiert die Zeile nicht vor dem workflow_dispatch.`,
+      );
+    }
+
+    if (verifyCount > 1) {
+      throw new Error(
+        `Supabase verify failed: scan_id ${scanId} ist nach dem Speichern nicht eindeutig (${verifyCount} Treffer).`,
+      );
+    }
+
+    const verifyRow = verifyRows?.[0];
     const persisted = verifyRow?.raw_scan_result as RawScanResult | null;
     if (!persisted || typeof persisted !== 'object') {
       if (attempt === 2) {
@@ -783,6 +820,7 @@ async function main() {
       process.exit(1);
     }
     supabase = createClient(url, key);
+    await assertSingleScanRowExists(supabase, scanId);
   }
 
   console.log(`\n  GreenOnion A11y Scanner — GitHub Actions Mode`);
