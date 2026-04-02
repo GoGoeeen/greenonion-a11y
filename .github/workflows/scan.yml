@@ -41,6 +41,42 @@ jobs:
 
       - run: npx playwright install chromium --with-deps
 
+      - name: Preflight validation
+        shell: bash
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_CLIENT_ID: ${{ inputs.client_id }}
+          INPUT_SCAN_ID: ${{ inputs.scan_id }}
+          INPUT_MAX_PAGES: ${{ inputs.max_pages }}
+          INPUT_SCAN_TYPE: ${{ inputs.scan_type }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          [[ -n "${INPUT_DOMAIN}" ]] || fail "workflow input 'domain' fehlt"
+          [[ -n "${INPUT_CLIENT_ID}" ]] || fail "workflow input 'client_id' fehlt"
+          [[ -n "${INPUT_SCAN_ID}" ]] || fail "workflow input 'scan_id' fehlt"
+          [[ -n "${SUPABASE_URL}" ]] || fail "GitHub secret 'SUPABASE_URL' fehlt"
+          [[ -n "${SUPABASE_SERVICE_KEY}" ]] || fail "GitHub secret 'SUPABASE_SERVICE_KEY' fehlt"
+
+          [[ "${INPUT_SCAN_TYPE}" == "quick" || "${INPUT_SCAN_TYPE}" == "full" ]] || fail "scan_type muss 'quick' oder 'full' sein"
+          [[ "${INPUT_MAX_PAGES}" =~ ^[1-9][0-9]*$ ]] || fail "max_pages muss eine positive Ganzzahl sein"
+
+          uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+          [[ "${INPUT_CLIENT_ID}" =~ ${uuid_re} ]] || fail "client_id ist keine gueltige UUID"
+          [[ "${INPUT_SCAN_ID}" =~ ${uuid_re} ]] || fail "scan_id ist keine gueltige UUID"
+
+          if [[ "${INPUT_SCAN_TYPE}" == "full" && -z "${OPENAI_API_KEY}" ]]; then
+            echo "::warning::OPENAI_API_KEY fehlt. Der Scan laeuft trotzdem, aber die semantische LLM-Nachpruefung wird uebersprungen."
+          fi
+
       - name: Run accessibility scan
         run: |
           npm run scan -- \

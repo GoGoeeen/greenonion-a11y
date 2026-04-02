@@ -74,6 +74,10 @@ interface NormalizedDomain {
   host: string;
 }
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 // --- CLI Argument Parser ---
 
 function parseArgs(argv: string[]): CliArgs {
@@ -675,7 +679,8 @@ async function main() {
   const rawDomain = args.domain;
   const clientId = args['client-id'];
   const scanId = args['scan-id'];
-  const maxPages = parseInt(args['max-pages'] || '10', 10);
+  const rawMaxPages = args['max-pages'] || '10';
+  const maxPages = parseInt(rawMaxPages, 10);
   const scanType = args['scan-type'] === 'quick' ? 'quick' : 'full';
   const isLocal = args.local === true;
 
@@ -695,6 +700,11 @@ async function main() {
   const targetUrl = normalized.baseUrl;
   const domain = normalized.host;
 
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    console.error(`Fehler: --max-pages muss eine positive Ganzzahl sein (erhalten: ${rawMaxPages})`);
+    process.exit(1);
+  }
+
   // Supabase init (nur wenn nicht --local)
   let supabase: SupabaseClient | null = null;
   if (!isLocal) {
@@ -708,6 +718,18 @@ async function main() {
       console.error('Fehler: --scan-id ist erforderlich (oder --local verwenden)');
       process.exit(1);
     }
+    if (!clientId) {
+      console.error('Fehler: --client-id ist erforderlich (oder --local verwenden)');
+      process.exit(1);
+    }
+    if (!isUuid(scanId)) {
+      console.error(`Fehler: --scan-id ist keine gueltige UUID (${scanId})`);
+      process.exit(1);
+    }
+    if (!isUuid(clientId)) {
+      console.error(`Fehler: --client-id ist keine gueltige UUID (${clientId})`);
+      process.exit(1);
+    }
     supabase = createClient(url, key);
   }
 
@@ -717,6 +739,7 @@ async function main() {
   console.log(`  Scan Type: ${scanType}`);
   console.log(`  Mode: ${isLocal ? 'local' : 'supabase'}`);
   if (scanId) console.log(`  Scan ID: ${scanId}`);
+  if (clientId) console.log(`  Client ID: ${clientId}`);
   console.log('');
 
   // Set status to running
