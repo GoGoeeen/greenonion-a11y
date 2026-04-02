@@ -14,6 +14,7 @@
 
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { chromium } from 'playwright';
 import { scan } from '../scanner.js';
 import { runAgentEvaluation } from './agent.js';
 import { manualChecks, type ManualCheckDefinition } from './manual-checks.js';
@@ -176,6 +177,32 @@ async function probeReachability(targetUrl: string): Promise<void> {
       return;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const response = await page.goto(targetUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    });
+
+    if (!response) {
+      throw new Error('Playwright-Navigation lieferte keine HTTP-Antwort');
+    }
+
+    if (response.status() >= 500) {
+      throw new Error(`Server antwortet mit Status ${response.status()} bei Playwright-Navigation`);
+    }
+
+    return;
+  } catch (err) {
+    lastError = err instanceof Error ? err : new Error(String(err));
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => undefined);
     }
   }
 
