@@ -157,6 +157,31 @@ async function checkRobotsTxt(baseUrl: string): Promise<{ allowed: boolean; warn
   }
 }
 
+async function probeReachability(targetUrl: string): Promise<void> {
+  const methods: Array<'HEAD' | 'GET'> = ['HEAD', 'GET'];
+  let lastError: Error | null = null;
+
+  for (const method of methods) {
+    try {
+      const res = await fetch(targetUrl, {
+        method,
+        signal: AbortSignal.timeout(10000),
+        redirect: 'follow',
+      });
+
+      if (!res.ok && res.status >= 500) {
+        throw new Error(`Server antwortet mit Status ${res.status} bei ${method}`);
+      }
+
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  throw lastError ?? new Error('Unbekannter Fehler bei Erreichbarkeitspruefung');
+}
+
 interface RawIssue {
   rule: string;
   severity: string;
@@ -766,16 +791,9 @@ async function main() {
       warningMessage = robotsCheck.warning;
     }
 
-    // Domain erreichbar?
+    // Domain erreichbar? Fallback von HEAD auf GET, falls HEAD vom Ziel nicht sauber unterstuetzt wird.
     try {
-      const probe = await fetch(targetUrl, {
-        method: 'HEAD',
-        signal: AbortSignal.timeout(10000),
-        redirect: 'follow',
-      });
-      if (!probe.ok && probe.status >= 500) {
-        throw new Error(`Server antwortet mit Status ${probe.status}`);
-      }
+      await probeReachability(targetUrl);
     } catch (err) {
       const message = `Domain ${targetUrl} nicht erreichbar: ${(err as Error).message}`;
       console.error(`  ${message}`);
