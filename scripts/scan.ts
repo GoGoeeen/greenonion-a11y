@@ -24,6 +24,8 @@ import {
   extractWcagCriteria,
 } from './accessibility-score.js';
 import { writeFileSync, mkdirSync } from 'fs';
+import { normalizeScan } from '../src/normalize/normalize-scan.js';
+import { exportNormalizedBundle } from '../src/reporting/export-json.js';
 
 // --- Types ---
 
@@ -222,7 +224,7 @@ interface RawIssue {
     recommended_fix?: string;
     explanation?: string;
   };
-  nodes?: Array<{ url?: string; selector: string; html?: string; failureSummary?: string }>;
+  nodes?: Array<{ url?: string; selector: string; html?: string; dom_context?: string | null; failureSummary?: string }>;
   needsReview?: boolean;
 }
 
@@ -914,10 +916,13 @@ async function main() {
     console.log(`  Score: ${score}/100`);
     console.log(`  Critical: ${counts.critical}, Serious: ${counts.serious}, Moderate: ${counts.moderate}, Minor: ${counts.minor}`);
 
+    const timestamp = Date.now();
+    const outputBaseName = `scan_${domain.replace(/[^a-z0-9.-]/gi, '_')}_${timestamp}`;
+
     if (isLocal) {
       // Lokaler Modus: JSON-Datei speichern
       mkdirSync('output', { recursive: true });
-      const outputPath = `output/scan_${domain.replace(/[^a-z0-9.-]/gi, '_')}_${Date.now()}.json`;
+      const outputPath = `output/${outputBaseName}.json`;
       const output = {
         domain,
         scan_date: new Date().toISOString(),
@@ -948,6 +953,23 @@ async function main() {
         errorMessage: warningMessage,
       });
       console.log(`\n  Ergebnis in Supabase gespeichert (Scan ${scanId})\n`);
+    }
+
+    // Normalisierter Bundle-Export (Phase A) — paralleler JSON-Export fuer Automation Layer
+    try {
+      const bundle = normalizeScan(
+        finalScanResult as Parameters<typeof normalizeScan>[0],
+        findings,
+        mergedManualChecks as Parameters<typeof normalizeScan>[2],
+      );
+      mkdirSync('output', { recursive: true });
+      const normalizedPath = `output/${outputBaseName}_normalized.json`;
+      await exportNormalizedBundle(bundle, normalizedPath);
+      console.log(`  Normalisierter Bundle gespeichert: ${normalizedPath}`);
+      console.log(`  finding_instances: ${bundle.finding_instances.length}, automation_candidates: ${bundle.automation_candidates.length}\n`);
+    } catch (bundleErr) {
+      // Bundle-Export scheitert nie den Haupt-Scan
+      console.warn(`  Warnung: Normalisierter Bundle-Export fehlgeschlagen: ${(bundleErr as Error).message}`);
     }
 
   } catch (err) {

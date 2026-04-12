@@ -201,6 +201,34 @@ function loadUrlList(filePath, baseUrl) {
 }
 
 // ============================================================
+// DOM-Context-Helfer fuer reichhaltigere Evidenz
+// ============================================================
+
+/**
+ * Sammelt parentElement.outerHTML fuer eine Liste von CSS-Selektoren in einem Batch-Call.
+ * Best-effort: Fehler (ungueltige Selektoren, Cross-Origin-Frames) liefern null.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string[]} selectors
+ * @returns {Promise<Array<string|null>>}
+ */
+async function batchGetDomContexts(page, selectors) {
+  if (selectors.length === 0) return [];
+  try {
+    return await page.evaluate((sels) => sels.map(sel => {
+      if (!sel) return null;
+      try {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        return (el.parentElement ? el.parentElement.outerHTML : el.outerHTML).substring(0, 2000);
+      } catch { return null; }
+    }), selectors);
+  } catch {
+    return selectors.map(() => null);
+  }
+}
+
+// ============================================================
 // HEBEL 1: axe-core erweitert (incomplete + iframes + shadowDom)
 // ============================================================
 async function scanPageAxe(page, url) {
@@ -213,7 +241,22 @@ async function scanPageAxe(page, url) {
       .options({ iframes: true, shadowDom: true })
       .analyze();
 
-    const mapNodes = (v) => ({
+    // Batch-collect dom_context (parentElement.outerHTML) fuer Violations und Incomplete
+    const violationSelectors = results.violations.flatMap(v =>
+      v.nodes.map(n => n.target?.[0] ?? '')
+    );
+    const incompleteFiltered = results.incomplete.filter(v => v.nodes.length > 0);
+    const incompleteSelectors = incompleteFiltered.flatMap(v =>
+      v.nodes.map(n => n.target?.[0] ?? '')
+    );
+
+    const [violationContexts, incompleteContexts] = await Promise.all([
+      batchGetDomContexts(page, violationSelectors),
+      batchGetDomContexts(page, incompleteSelectors),
+    ]);
+
+    let vCtxIdx = 0;
+    const mapViolationNodes = (v) => ({
       rule: v.id,
       engine: 'axe-core',
       severity: v.impact,
@@ -224,19 +267,32 @@ async function scanPageAxe(page, url) {
       nodes: v.nodes.map(n => ({
         selector: n.target.join(' > '),
         html: n.html?.substring(0, 500),
+        dom_context: violationContexts[vCtxIdx++] ?? null,
         failureSummary: n.failureSummary,
       })),
     });
 
-    const violations = results.violations.map(mapNodes);
+    let iCtxIdx = 0;
+    const mapIncompleteNodes = (v) => ({
+      rule: v.id,
+      engine: 'axe-core',
+      severity: v.impact,
+      description: v.description,
+      help: v.help,
+      helpUrl: v.helpUrl,
+      wcagTags: v.tags.filter(t => t.startsWith('wcag')),
+      needsReview: true,
+      nodes: v.nodes.map(n => ({
+        selector: n.target.join(' > '),
+        html: n.html?.substring(0, 500),
+        dom_context: incompleteContexts[iCtxIdx++] ?? null,
+        failureSummary: n.failureSummary,
+      })),
+    });
 
+    const violations = results.violations.map(mapViolationNodes);
     // Incomplete = semi-automatische Checks, die wahrscheinlich fehlschlagen
-    const incomplete = results.incomplete
-      .filter(v => v.nodes.length > 0)
-      .map(v => ({
-        ...mapNodes(v),
-        needsReview: true,
-      }));
+    const incomplete = incompleteFiltered.map(mapIncompleteNodes);
 
     return { violations, incomplete };
   } catch (err) {
@@ -291,12 +347,19 @@ async function scanPageHTMLCS(page) {
           HTMLCS.process('WCAG2AA', document, function() {
             var msgs = HTMLCS.getMessages();
             resolve(msgs.filter(function(m) { return m.type <= 2; }).slice(0, 500).map(function(m) {
+              var domCtx = null;
+              if (m.element) {
+                try {
+                  domCtx = (m.element.parentElement ? m.element.parentElement.outerHTML : m.element.outerHTML).substring(0, 2000);
+                } catch (e) { domCtx = null; }
+              }
               return {
                 type: m.type,
                 code: m.code,
                 message: m.msg,
                 selector: m.element ? _getSelector(m.element) : '',
                 html: m.element ? m.element.outerHTML.substring(0, 300) : '',
+                dom_context: domCtx,
               };
             }));
           });
@@ -314,6 +377,7 @@ async function scanPageHTMLCS(page) {
       nodes: [{
         selector: i.selector,
         html: i.html,
+        dom_context: i.dom_context ?? null,
         failureSummary: i.message,
       }],
     }));
