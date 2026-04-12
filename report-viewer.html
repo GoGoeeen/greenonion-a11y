@@ -1,125 +1,722 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GreenOnion Accessibility Report</title>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; color: #333; }
-        h1 { color: #2c3e50; }
-        .card { border: 1px solid #eee; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .status { font-weight: bold; text-transform: uppercase; font-size: 0.9em; padding: 4px 8px; border-radius: 4px; display: inline-block; }
-        .status.pending { background: #f39c12; color: white; }
-        .status.processing { background: #3498db; color: white; }
-        .status.completed { background: #27ae60; color: white; }
-        .status.failed { background: #c0392b; color: white; }
-        .metric { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #f0f0f0; padding-bottom: 5px; }
-        .metric label { color: #7f8c8d; }
-        .metric value { font-weight: bold; }
-        pre { background: #f8f9fa; padding: 10px; overflow-x: auto; border-radius: 4px; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GreenOnion A11y Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <style>
+    :root {
+      --go-turquoise: #4DC3BD;
+      --go-dark:      #003530;
+      --go-grey:      #F5F5F5;
+      --go-border:    #e2e8f0;
+      --go-text:      #1a202c;
+      --go-muted:     #718096;
+      --sev-critical: #e53e3e;
+      --sev-serious:  #dd6b20;
+      --sev-moderate: #d69e2e;
+      --sev-minor:    #38a169;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--go-grey); color: var(--go-text); min-height: 100vh; }
+
+    /* Header */
+    .header { background: var(--go-dark); color: white; padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+    .header-logo { font-size: 1.2rem; font-weight: 700; color: var(--go-turquoise); }
+    .header-meta { font-size: 0.85rem; color: #a0aec0; margin-left: auto; }
+
+    /* Layout */
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
+    .state-msg { text-align: center; padding: 60px 20px; color: var(--go-muted); }
+    .state-msg.error { color: var(--sev-critical); }
+
+    /* Scan-Bar */
+    .scan-bar { background: white; border: 1px solid var(--go-border); border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 20px; align-items: center; }
+    .scan-bar-item { display: flex; flex-direction: column; gap: 2px; }
+    .scan-bar-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--go-muted); }
+    .scan-bar-value { font-size: 0.95rem; font-weight: 600; }
+    .status-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
+    .status-badge.completed { background: #c6f6d5; color: #276749; }
+    .status-badge.failed    { background: #fed7d7; color: #9b2c2c; }
+    .status-badge.running   { background: #bee3f8; color: #2a69ac; }
+    .status-badge.pending   { background: #fefcbf; color: #744210; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+    .tab-btn { padding: 9px 20px; border: 1px solid var(--go-border); border-radius: 6px; background: white; cursor: pointer; font-size: 0.9rem; font-weight: 500; color: var(--go-muted); transition: all 0.15s; }
+    .tab-btn:hover { background: var(--go-grey); }
+    .tab-btn.active { background: var(--go-dark); color: white; border-color: var(--go-dark); }
+    .tab-badge { display: inline-block; background: rgba(255,255,255,0.2); border-radius: 999px; font-size: 0.75rem; padding: 0 6px; margin-left: 6px; }
+    .tab-btn:not(.active) .tab-badge { background: var(--go-grey); color: var(--go-muted); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Cards */
+    .card { background: white; border: 1px solid var(--go-border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+    .card-title { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--go-muted); margin-bottom: 12px; }
+
+    /* Executive: Score */
+    .exec-grid { display: grid; grid-template-columns: auto 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    @media (max-width: 700px) { .exec-grid { grid-template-columns: 1fr; } }
+    .score-card { background: var(--go-dark); color: white; border-radius: 8px; padding: 24px 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 130px; }
+    .score-number { font-size: 3.5rem; font-weight: 800; line-height: 1; color: var(--go-turquoise); }
+    .score-label  { font-size: 0.8rem; color: #a0aec0; margin-top: 4px; }
+    .risk-badge { display: inline-block; padding: 4px 14px; border-radius: 999px; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; margin-top: 10px; }
+    .risk-badge.critical { background: var(--sev-critical); color: white; }
+    .risk-badge.high     { background: var(--sev-serious);  color: white; }
+    .risk-badge.medium   { background: var(--sev-moderate); color: white; }
+    .risk-badge.low      { background: var(--sev-minor);    color: white; }
+
+    /* Severity Bars */
+    .sev-bars { display: flex; flex-direction: column; gap: 10px; }
+    .sev-row { display: flex; align-items: center; gap: 10px; }
+    .sev-name  { width: 70px; font-size: 0.82rem; font-weight: 600; }
+    .sev-bar-wrap { flex: 1; background: var(--go-grey); border-radius: 4px; height: 8px; overflow: hidden; }
+    .sev-bar  { height: 100%; border-radius: 4px; transition: width 0.4s; }
+    .sev-count { font-size: 0.82rem; font-weight: 700; width: 30px; text-align: right; }
+    .sev-name.critical,.sev-count.critical { color: var(--sev-critical); }
+    .sev-name.serious, .sev-count.serious  { color: var(--sev-serious);  }
+    .sev-name.moderate,.sev-count.moderate { color: var(--sev-moderate); }
+    .sev-name.minor,   .sev-count.minor    { color: var(--sev-minor);    }
+    .sev-bar.critical { background: var(--sev-critical); }
+    .sev-bar.serious  { background: var(--sev-serious);  }
+    .sev-bar.moderate { background: var(--sev-moderate); }
+    .sev-bar.minor    { background: var(--sev-minor);    }
+
+    /* Evidence */
+    .evidence-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .evidence-item { background: var(--go-grey); border-radius: 6px; padding: 12px; text-align: center; }
+    .evidence-num  { font-size: 1.8rem; font-weight: 800; color: var(--go-dark); }
+    .evidence-name { font-size: 0.75rem; color: var(--go-muted); margin-top: 2px; }
+
+    /* WCAG List */
+    .wcag-list { list-style: none; }
+    .wcag-list li { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--go-border); font-size: 0.88rem; }
+    .wcag-list li:last-child { border-bottom: none; }
+    .wcag-sc    { font-weight: 700; font-family: monospace; color: var(--go-dark); }
+    .wcag-count { background: var(--go-grey); padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; }
+
+    /* Filter Buttons */
+    .filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; align-items: center; }
+    .filter-label { font-size: 0.82rem; color: var(--go-muted); }
+    .filter-btn { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--go-border); background: white; cursor: pointer; font-size: 0.82rem; transition: all 0.15s; }
+    .filter-btn.active { background: var(--go-dark); color: white; border-color: var(--go-dark); }
+
+    /* Remediation Groups */
+    .finding-group { margin-bottom: 12px; }
+    .finding-group-header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--go-grey); border: 1px solid var(--go-border); border-radius: 6px 6px 0 0; cursor: pointer; user-select: none; }
+    .finding-group-header:hover { background: #edf2f7; }
+    .finding-group-name  { font-weight: 600; font-size: 0.9rem; flex: 1; }
+    .finding-group-count { color: var(--go-muted); font-size: 0.82rem; }
+    .chevron { font-size: 0.8rem; color: var(--go-muted); transition: transform 0.2s; }
+    .finding-group.open .chevron { transform: rotate(90deg); }
+    .finding-group-body { display: none; border: 1px solid var(--go-border); border-top: none; border-radius: 0 0 6px 6px; overflow: hidden; }
+    .finding-group.open .finding-group-body { display: block; }
+
+    /* Instance Rows */
+    .instance-row { padding: 12px 16px; border-bottom: 1px solid var(--go-border); font-size: 0.85rem; }
+    .instance-row:last-child { border-bottom: none; }
+    .instance-top { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+    .instance-rule { font-weight: 600; color: var(--go-dark); font-family: monospace; font-size: 0.82rem; }
+    .wcag-tag { background: #ebf8ff; color: #2b6cb0; padding: 1px 7px; border-radius: 3px; font-size: 0.75rem; font-family: monospace; }
+    .sev-pill { padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; }
+    .sev-pill.critical { background: #fed7d7; color: #9b2c2c; }
+    .sev-pill.serious  { background: #feebc8; color: #7b341e; }
+    .sev-pill.moderate { background: #fefcbf; color: #744210; }
+    .sev-pill.minor    { background: #c6f6d5; color: #276749; }
+    .instance-failure { color: var(--go-muted); margin-bottom: 5px; line-height: 1.4; }
+    .instance-locator { font-family: monospace; font-size: 0.78rem; background: var(--go-grey); padding: 3px 8px; border-radius: 4px; color: var(--go-dark); word-break: break-all; }
+    .instance-page { font-size: 0.78rem; color: var(--go-muted); margin-top: 4px; }
+
+    /* Automation Table */
+    .auto-table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    th { text-align: left; padding: 9px 12px; background: var(--go-grey); border: 1px solid var(--go-border); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--go-muted); white-space: nowrap; }
+    td { padding: 9px 12px; border: 1px solid var(--go-border); vertical-align: top; word-break: break-word; }
+    tr:hover td { background: #f7fafc; }
+
+    .sr-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+    .sr-badge.sr_direct          { background: #b2f5ea; color: #234e52; }
+    .sr-badge.sr_indirect        { background: #e9d8fd; color: #44337a; }
+    .sr-badge.sr_not_suitable    { background: #e2e8f0; color: #4a5568; }
+    .sr-badge.manual_only        { background: #feebc8; color: #7b341e; }
+    .sr-badge.needs_flow_context { background: #e9d8fd; color: #553c9a; }
+
+    .nvda-yes { color: var(--go-turquoise); font-weight: 700; }
+    .nvda-no  { color: var(--go-muted); }
+    .conf-high   { color: var(--sev-minor);    font-weight: 600; }
+    .conf-medium { color: var(--sev-moderate); font-weight: 600; }
+    .conf-low    { color: var(--sev-serious);  font-weight: 600; }
+    .locator-css { font-family: monospace; font-size: 0.78rem; word-break: break-all; }
+
+    /* Misc */
+    .fallback-note { background: #fffbeb; border: 1px solid #f6e05e; border-radius: 6px; padding: 12px 16px; font-size: 0.85rem; color: #744210; margin-bottom: 16px; }
+    .empty { text-align: center; padding: 40px; color: var(--go-muted); font-size: 0.9rem; }
+  </style>
 </head>
 <body>
-    <h1>Accessibility Scan Report</h1>
-    
-    <div id="loading">Loading report...</div>
-    <div id="content" style="display:none;">
-        <div class="card">
-            <h2>Scan Status</h2>
-            <div class="metric">
-                <label>Domain:</label>
-                <span id="domain"></span>
-            </div>
-            <div class="metric">
-                <label>Status:</label>
-                <span id="status" class="status"></span>
-            </div>
-            <div class="metric">
-                <label>Scanned At:</label>
-                <span id="scannedAt"></span>
-            </div>
-            <div id="errorBox" style="display:none; color: red; margin-top: 10px;"></div>
-        </div>
 
-        <div id="resultsCard" class="card" style="display:none;">
-            <h2>Results</h2>
-            <div class="metric">
-                <label>Score:</label>
-                <span id="score"></span>
-            </div>
-            <div class="metric">
-                <label>Violations:</label>
-                <span id="violationCount"></span>
-            </div>
-            <h3>Raw Data</h3>
-            <pre id="rawResults"></pre>
-        </div>
+<div class="header">
+  <span class="header-logo">GreenOnion</span>
+  <span style="color:#a0aec0;font-size:0.9rem;">A11y Report</span>
+  <span class="header-meta" id="headerMeta"></span>
+</div>
+
+<div class="container">
+  <div id="stateMsg" class="state-msg">Lade Report&hellip;</div>
+  <div id="appContent" style="display:none;">
+
+    <div class="scan-bar">
+      <div class="scan-bar-item">
+        <span class="scan-bar-label">Domain</span>
+        <span class="scan-bar-value" id="barDomain"></span>
+      </div>
+      <div class="scan-bar-item">
+        <span class="scan-bar-label">Scan-Datum</span>
+        <span class="scan-bar-value" id="barDate"></span>
+      </div>
+      <div class="scan-bar-item">
+        <span class="scan-bar-label">Seiten</span>
+        <span class="scan-bar-value" id="barPages"></span>
+      </div>
+      <div class="scan-bar-item">
+        <span class="scan-bar-label">Status</span>
+        <span class="scan-bar-value"><span id="barStatus" class="status-badge"></span></span>
+      </div>
     </div>
 
-    <script>
-        // Use params from URL or default for demo
-        const urlParams = new URLSearchParams(window.location.search);
-        const clientId = urlParams.get('clientId');
-        
-        // Configuration - in real app, these would be injected or better managed
-        const SUPABASE_URL = 'https://zkqljbjtbcaqfkyfnwfz.supabase.co'; 
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprcWxqYmp0YmNhcWZreWZud2Z6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEyMzQyNzIsImV4cCI6MjA4NjgxMDI3Mn0.BzwL7VwvW8vDY0DIgyNsyAFRdLTUO1a3_Gr7V3MbtWk';
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="executive">Executive <span class="tab-badge" id="tabBadgeExec"></span></button>
+      <button class="tab-btn" data-tab="remediation">Remediation <span class="tab-badge" id="tabBadgeRem"></span></button>
+      <button class="tab-btn" data-tab="automation">Automation <span class="tab-badge" id="tabBadgeAuto"></span></button>
+    </div>
 
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    <!-- Executive -->
+    <div id="tab-executive" class="tab-panel active">
+      <div id="execFallback" class="fallback-note" style="display:none;">
+        Kein <code>normalized_bundle</code> vorhanden &mdash; Basis-Auswertung aus <code>raw_scan_result</code>.
+      </div>
+      <div class="exec-grid">
+        <div class="score-card">
+          <div class="score-number" id="execScore">—</div>
+          <div class="score-label">/ 100</div>
+          <div id="execRisk" class="risk-badge"></div>
+        </div>
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-title">Findings nach Schweregrad</div>
+          <div class="sev-bars" id="sevBars"></div>
+        </div>
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-title">Prüfmethoden</div>
+          <div class="evidence-grid" id="evidenceGrid"></div>
+        </div>
+      </div>
+      <div class="card" id="wcagCard" style="display:none;">
+        <div class="card-title">Top WCAG-Bereiche</div>
+        <ul class="wcag-list" id="wcagList"></ul>
+      </div>
+    </div>
 
-        async function loadReport() {
-            if (!clientId) {
-                document.getElementById('loading').textContent = 'No Client ID provided in URL (?clientId=...)';
-                return;
-            }
+    <!-- Remediation -->
+    <div id="tab-remediation" class="tab-panel">
+      <div class="filter-bar">
+        <span class="filter-label">Filter:</span>
+        <button class="filter-btn active" data-sev="all">Alle</button>
+        <button class="filter-btn" data-sev="critical">Critical</button>
+        <button class="filter-btn" data-sev="serious">Serious</button>
+        <button class="filter-btn" data-sev="moderate">Moderate</button>
+        <button class="filter-btn" data-sev="minor">Minor</button>
+      </div>
+      <div id="remGroups"></div>
+    </div>
 
-            try {
-                // Fetch latest scan for client
-                const { data, error } = await supabase
-                    .from('accessibility_scans')
-                    .select('*')
-                    .eq('client_id', clientId)
-                    .order('scanned_at', { ascending: false })
-                    .limit(1)
-                    .single();
+    <!-- Automation -->
+    <div id="tab-automation" class="tab-panel">
+      <div class="filter-bar">
+        <span class="filter-label">SR-Relevance:</span>
+        <button class="filter-btn active" data-sr="all">Alle</button>
+        <button class="filter-btn" data-sr="sr_direct">SR Direct</button>
+        <button class="filter-btn" data-sr="sr_indirect">SR Indirect</button>
+        <button class="filter-btn" data-sr="needs_flow_context">Flow Context</button>
+        <button class="filter-btn" data-sr="manual_only">Manual</button>
+        <button class="filter-btn" data-sr="sr_not_suitable">Not Suitable</button>
+      </div>
+      <div class="auto-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rule</th><th>Severity</th><th>Komponente</th>
+              <th>SR-Relevance</th><th>NVDA</th><th>Retest</th>
+              <th>Confidence</th><th>Locator</th><th>Seite</th>
+            </tr>
+          </thead>
+          <tbody id="autoTableBody"></tbody>
+        </table>
+        <div class="empty" id="autoEmpty" style="display:none;">Keine Kandidaten für diesen Filter.</div>
+      </div>
+    </div>
 
-                if (error) throw error;
+  </div>
+</div>
 
-                if (!data) {
-                    document.getElementById('loading').textContent = 'No scan found for this client.';
-                    return;
-                }
+<script>
+'use strict';
 
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('content').style.display = 'block';
+// Konfiguration
+const SUPABASE_URL      = 'https://zkqljbjtbcaqfkyfnwfz.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprcWxqYmp0YmNhcWZreWZud2Z6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEyMzQyNzIsImV4cCI6MjA4NjgxMDI3Mn0.BzwL7VwvW8vDY0DIgyNsyAFRdLTUO1a3_Gr7V3MbtWk';
 
-                document.getElementById('domain').textContent = data.domain;
-                const statusEl = document.getElementById('status');
-                statusEl.textContent = data.status;
-                statusEl.className = 'status ' + data.status;
-                document.getElementById('scannedAt').textContent = new Date(data.scanned_at).toLocaleString();
+// State
+let allInstances  = [];
+let allCandidates = [];
+let activeSevFilter = 'all';
+let activeSrFilter  = 'all';
 
-                if (data.status === 'failed') {
-                    const errorBox = document.getElementById('errorBox');
-                    errorBox.style.display = 'block';
-                    errorBox.textContent = data.error_message;
-                }
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-                const raw = data.raw_scan_result || data.results || null;
-                if (data.status === 'completed' && raw) {
-                    document.getElementById('resultsCard').style.display = 'block';
-                    document.getElementById('score').textContent = data.score ?? raw.score ?? 'N/A';
-                    document.getElementById('violationCount').textContent = data.total_findings ?? raw.totalIssues ?? 'N/A';
-                    document.getElementById('rawResults').textContent = JSON.stringify(raw, null, 2);
-                }
+// --- DOM-Helfer ---
+function el(id) { return document.getElementById(id); }
 
-            } catch (err) {
-                document.getElementById('loading').textContent = 'Error loading report: ' + err.message;
-            }
-        }
+/** Setzt HTML-Inhalt nach DOMPurify-Sanitierung (nur sichere Tags/Attribute) */
+function safeHtml(element, html) {
+  element.innerHTML = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['div','span','code','ul','li','table','thead','tbody','tr','th','td','b','strong','em','br'],
+    ALLOWED_ATTR: ['class','title','style','data-tab','data-sev','data-sr'],
+  });
+}
 
-        loadReport();
-    </script>
+/** Text-Only-Setter (kein HTML) */
+function setText(id, value) {
+  const e = el(id);
+  if (e) e.textContent = String(value ?? '');
+}
+
+function showState(msg, isError) {
+  const e = el('stateMsg');
+  e.textContent = msg;
+  e.className = 'state-msg' + (isError ? ' error' : '');
+  e.style.display = 'block';
+  el('appContent').style.display = 'none';
+}
+function showApp() {
+  el('stateMsg').style.display = 'none';
+  el('appContent').style.display = 'block';
+}
+
+// --- Tab-Steuerung (kein innerHTML) ---
+document.querySelectorAll('.tab-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+    btn.classList.add('active');
+    el('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// --- Filter-Buttons Remediation ---
+document.querySelectorAll('.filter-btn[data-sev]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.filter-btn[data-sev]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeSevFilter = btn.dataset.sev;
+    renderRemediation(allInstances);
+  });
+});
+
+// --- Filter-Buttons Automation ---
+document.querySelectorAll('.filter-btn[data-sr]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.filter-btn[data-sr]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeSrFilter = btn.dataset.sr;
+    renderAutomation(allCandidates);
+  });
+});
+
+// --- Severity-Bars (DOM-API, kein innerHTML) ---
+function renderSevBars(counts) {
+  const container = el('sevBars');
+  container.textContent = '';
+  const sevs = ['critical','serious','moderate','minor'];
+  const max  = Math.max.apply(null, sevs.map(function(s) { return counts[s] || 0; }).concat([1]));
+  sevs.forEach(function(s) {
+    const n   = counts[s] || 0;
+    const pct = Math.round((n / max) * 100);
+    const row = document.createElement('div');
+    row.className = 'sev-row';
+
+    const name = document.createElement('span');
+    name.className = 'sev-name ' + s;
+    name.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'sev-bar-wrap';
+    const bar = document.createElement('div');
+    bar.className = 'sev-bar ' + s;
+    bar.style.width = pct + '%';
+    wrap.appendChild(bar);
+
+    const cnt = document.createElement('span');
+    cnt.className = 'sev-count ' + s;
+    cnt.textContent = String(n);
+
+    row.append(name, wrap, cnt);
+    container.appendChild(row);
+  });
+}
+
+// --- Evidence-Grid (DOM-API) ---
+function renderEvidence(ev) {
+  const container = el('evidenceGrid');
+  container.textContent = '';
+  var items = [
+    { n: ev.automatic_checks   || 0, label: 'Automatisch'    },
+    { n: ev.ai_verified_checks || 0, label: 'AI-verifiziert' },
+    { n: ev.manual_checks      || 0, label: 'Manuell'        },
+    { n: ev.needs_human_review || 0, label: 'Review nötig'   },
+  ];
+  items.forEach(function(item) {
+    const cell = document.createElement('div');
+    cell.className = 'evidence-item';
+    const num  = document.createElement('div');
+    num.className = 'evidence-num';
+    num.textContent = String(item.n);
+    const name = document.createElement('div');
+    name.className = 'evidence-name';
+    name.textContent = item.label;
+    cell.append(num, name);
+    container.appendChild(cell);
+  });
+}
+
+// --- WCAG-List (DOM-API) ---
+function renderWcagAreas(areas) {
+  if (!areas || !areas.length) return;
+  el('wcagCard').style.display = '';
+  const list = el('wcagList');
+  list.textContent = '';
+  areas.slice(0, 10).forEach(function(a) {
+    const li   = document.createElement('li');
+    const sc   = document.createElement('span');
+    sc.className = 'wcag-sc';
+    sc.textContent = String(a.wcag_area || '');
+    const cnt  = document.createElement('span');
+    cnt.className = 'wcag-count';
+    cnt.textContent = (a.finding_count || 0) + ' Findings';
+    li.append(sc, cnt);
+    list.appendChild(li);
+  });
+}
+
+// --- Executive: normalized ---
+function renderExecutiveNormalized(bundle) {
+  var ex = bundle.executive_summary || {};
+  setText('execScore', ex.score ?? '—');
+  var riskEl = el('execRisk');
+  riskEl.textContent = (ex.risk_level || '').toUpperCase();
+  riskEl.className   = 'risk-badge ' + (ex.risk_level || 'low');
+  renderSevBars(ex.severity_counts || {});
+  renderEvidence(ex.evidence_breakdown || {});
+  renderWcagAreas(ex.top_wcag_areas || []);
+  setText('tabBadgeExec', ex.total_findings ?? '');
+}
+
+// --- Executive: fallback ---
+function renderExecutiveFallback(data) {
+  el('execFallback').style.display = '';
+  setText('execScore', data.score ?? '—');
+  var score = data.score || 0;
+  var risk  = score >= 90 ? 'low' : score >= 70 ? 'medium' : score >= 50 ? 'high' : 'critical';
+  var riskEl = el('execRisk');
+  riskEl.textContent = risk.toUpperCase();
+  riskEl.className   = 'risk-badge ' + risk;
+  renderSevBars({
+    critical: data.critical_count || 0, serious:  data.serious_count  || 0,
+    moderate: data.moderate_count || 0, minor:    data.minor_count    || 0,
+  });
+  var raw = data.raw_scan_result || {};
+  renderEvidence({
+    automatic_checks:   data.total_findings || 0,
+    ai_verified_checks: 0,
+    manual_checks:      (Array.isArray(raw.manual_checks) ? raw.manual_checks.length : 0),
+    needs_human_review: 0,
+  });
+  setText('tabBadgeExec', data.total_findings ?? '');
+}
+
+// --- Remediation (DOM-API) ---
+function renderRemediation(instances) {
+  var container = el('remGroups');
+  container.textContent = '';
+  var sevOrder = { critical:0, serious:1, moderate:2, minor:3 };
+  var filter   = activeSevFilter;
+  var filtered = filter === 'all' ? instances : instances.filter(function(i) { return i.severity === filter; });
+
+  // Gruppiere nach component_type
+  var groups = {};
+  filtered.forEach(function(inst) {
+    var key = inst.component_type || 'unknown';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(inst);
+  });
+
+  var keys = Object.keys(groups).sort(function(a, b) {
+    function worstSev(g) { return Math.min.apply(null, g.map(function(i) { return sevOrder[i.severity] != null ? sevOrder[i.severity] : 99; })); }
+    return worstSev(groups[a]) - worstSev(groups[b]);
+  });
+
+  if (!keys.length) {
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'Keine Findings für diesen Filter.';
+    container.appendChild(empty);
+    return;
+  }
+
+  keys.forEach(function(key) {
+    var items = groups[key];
+    var worstSev = items.reduce(function(w, i) {
+      return (sevOrder[i.severity] != null ? sevOrder[i.severity] : 99) < (sevOrder[w] != null ? sevOrder[w] : 99) ? i.severity : w;
+    }, items[0].severity);
+
+    // Group wrapper
+    var group = document.createElement('div');
+    group.className = 'finding-group open';
+
+    // Header
+    var header = document.createElement('div');
+    header.className = 'finding-group-header';
+    header.addEventListener('click', function() { group.classList.toggle('open'); });
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'finding-group-name';
+    nameEl.textContent = key;
+
+    var sevPill = document.createElement('span');
+    sevPill.className = 'sev-pill ' + worstSev;
+    sevPill.textContent = worstSev;
+
+    var countEl = document.createElement('span');
+    countEl.className = 'finding-group-count';
+    countEl.textContent = items.length + ' Instanz' + (items.length !== 1 ? 'en' : '');
+
+    var chevron = document.createElement('span');
+    chevron.className = 'chevron';
+    chevron.textContent = '▶';
+
+    header.append(nameEl, sevPill, countEl, chevron);
+
+    // Body
+    var body = document.createElement('div');
+    body.className = 'finding-group-body';
+
+    items.forEach(function(inst) {
+      var row = document.createElement('div');
+      row.className = 'instance-row';
+
+      var top = document.createElement('div');
+      top.className = 'instance-top';
+
+      var ruleEl = document.createElement('span');
+      ruleEl.className = 'instance-rule';
+      ruleEl.textContent = inst.rule_id || '—';
+      top.appendChild(ruleEl);
+
+      var pill = document.createElement('span');
+      pill.className = 'sev-pill ' + (inst.severity || '');
+      pill.textContent = inst.severity || '';
+      top.appendChild(pill);
+
+      (inst.wcag_sc || []).forEach(function(w) {
+        var tag = document.createElement('span');
+        tag.className = 'wcag-tag';
+        tag.textContent = w;
+        top.appendChild(tag);
+      });
+
+      row.appendChild(top);
+
+      if (inst.failure_summary) {
+        var fail = document.createElement('div');
+        fail.className = 'instance-failure';
+        fail.textContent = inst.failure_summary;
+        row.appendChild(fail);
+      }
+
+      var loc = inst.locator_primary && inst.locator_primary.value ? inst.locator_primary.value : '';
+      if (loc) {
+        var locEl = document.createElement('div');
+        locEl.className = 'instance-locator';
+        locEl.textContent = loc;
+        row.appendChild(locEl);
+      }
+
+      var pageShort = '';
+      try { pageShort = new URL(inst.page_url || '').pathname; } catch(e) { pageShort = inst.page_url || ''; }
+      var pageEl = document.createElement('div');
+      pageEl.className = 'instance-page';
+      pageEl.textContent = pageShort;
+      row.appendChild(pageEl);
+
+      body.appendChild(row);
+    });
+
+    group.append(header, body);
+    container.appendChild(group);
+  });
+}
+
+// --- Automation (DOM-API) ---
+function renderAutomation(candidates) {
+  var tbody  = el('autoTableBody');
+  var emptyEl = el('autoEmpty');
+  var filter = activeSrFilter;
+  var filtered = filter === 'all' ? candidates : candidates.filter(function(c) { return c.sr_relevance === filter; });
+
+  tbody.textContent = '';
+
+  if (!filtered.length) {
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  var retestLabels = { nvda_voice_assert: 'NVDA Voice', keyboard_only: 'Keyboard', dom_only: 'DOM', manual: 'Manuell' };
+
+  filtered.forEach(function(c) {
+    var pageShort = '';
+    try { pageShort = new URL(c.page_url || '').pathname; } catch(e) { pageShort = c.page_url || ''; }
+    var loc = c.locator_primary && c.locator_primary.value ? c.locator_primary.value : '';
+
+    var tr = document.createElement('tr');
+
+    function td(content, className) {
+      var cell = document.createElement('td');
+      if (className) cell.className = className;
+      if (content instanceof Node) cell.appendChild(content);
+      else cell.textContent = String(content ?? '—');
+      return cell;
+    }
+
+    var ruleCode = document.createElement('code');
+    ruleCode.textContent = c.rule_id || '—';
+
+    var sevPill = document.createElement('span');
+    sevPill.className = 'sev-pill ' + (c.severity || '');
+    sevPill.textContent = c.severity || '';
+
+    var srBadge = document.createElement('span');
+    srBadge.className = 'sr-badge ' + (c.sr_relevance || '');
+    srBadge.textContent = c.sr_relevance || '—';
+
+    tr.append(
+      td(ruleCode),
+      td(sevPill),
+      td(c.component_type || '—'),
+      td(srBadge),
+      td(c.nvda_candidate ? '✓' : '—', c.nvda_candidate ? 'nvda-yes' : 'nvda-no'),
+      td(retestLabels[c.retest_strategy] || c.retest_strategy || '—'),
+      td(c.confidence || '—', 'conf-' + (c.confidence || '')),
+      td(loc, 'locator-css'),
+      td(pageShort),
+    );
+    tr.title = c.page_url || '';
+    tbody.appendChild(tr);
+  });
+}
+
+// --- Haupt-Laderoutine ---
+async function loadReport() {
+  var params   = new URLSearchParams(window.location.search);
+  var scanId   = params.get('scanId');
+  var clientId = params.get('clientId');
+
+  if (!scanId && !clientId) {
+    showState('Kein scanId oder clientId in URL angegeben. Beispiel: ?scanId=UUID', true);
+    return;
+  }
+
+  try {
+    var query = sb
+      .from('accessibility_scans')
+      .select('id,domain,scan_date,scanned_at,status,error_message,score,total_findings,critical_count,serious_count,moderate_count,minor_count,pages_scanned,normalized_bundle,raw_scan_result')
+      .order('scanned_at', { ascending: false })
+      .limit(1);
+
+    if (scanId)   query = query.eq('id', scanId);
+    if (clientId) query = query.eq('client_id', clientId);
+
+    var result = await query.maybeSingle();
+    var data   = result.data;
+    var error  = result.error;
+
+    if (error) throw new Error(error.message);
+    if (!data) { showState('Kein Scan für diese ID gefunden.', true); return; }
+
+    // Scan-Bar
+    setText('barDomain', data.domain || '—');
+    setText('barDate', new Date(data.scan_date || data.scanned_at).toLocaleString('de-AT'));
+    setText('barPages', data.pages_scanned ?? '—');
+    var statusEl = el('barStatus');
+    statusEl.textContent = data.status || '—';
+    statusEl.className   = 'status-badge ' + (data.status || '');
+    setText('headerMeta', data.domain || '');
+
+    showApp();
+
+    var bundle = data.normalized_bundle;
+
+    if (bundle) {
+      allInstances  = bundle.finding_instances  || [];
+      allCandidates = bundle.automation_candidates || [];
+      renderExecutiveNormalized(bundle);
+      setText('tabBadgeRem',  allInstances.length);
+      setText('tabBadgeAuto', allCandidates.length);
+      renderRemediation(allInstances);
+      renderAutomation(allCandidates);
+    } else {
+      renderExecutiveFallback(data);
+      setText('tabBadgeRem',  data.total_findings ?? '?');
+      setText('tabBadgeAuto', '?');
+
+      // Remediation-Fallback aus raw_scan_result.pages
+      var raw = data.raw_scan_result || {};
+      if (Array.isArray(raw.pages)) {
+        allInstances = raw.pages.flatMap(function(page) {
+          return (page.issues || []).flatMap(function(issue) {
+            return (issue.nodes || []).map(function(node) {
+              return {
+                page_url:        page.url,
+                rule_id:         issue.rule || '—',
+                severity:        issue.severity || 'minor',
+                wcag_sc:         issue.wcagTags || issue.wcag_criteria || [],
+                component_type:  'unknown',
+                locator_primary: { type: 'css', value: node.selector || '' },
+                failure_summary: node.failureSummary || '',
+              };
+            });
+          });
+        });
+        renderRemediation(allInstances);
+      } else {
+        var emptyDiv = document.createElement('div');
+        emptyDiv.className = 'empty';
+        emptyDiv.textContent = 'Kein normalized_bundle und kein raw_scan_result.pages vorhanden.';
+        el('remGroups').appendChild(emptyDiv);
+      }
+      var autoEmpty = el('autoEmpty');
+      autoEmpty.style.display = '';
+      autoEmpty.textContent   = 'Automation Layer benötigt normalized_bundle — Backfill ausführen.';
+    }
+
+  } catch(err) {
+    showState('Fehler beim Laden: ' + (err.message || err), true);
+  }
+}
+
+loadReport();
+</script>
 </body>
 </html>
