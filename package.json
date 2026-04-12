@@ -13,7 +13,8 @@
     "test:score": "node --test tests/accessibility-score.test.js",
     "test:normalize": "node --import tsx/esm --test tests/normalize-scan.test.ts",
     "test:custom-checks": "node scripts/verify-custom-checks.js",
-    "test:all-custom-checks": "node scripts/verify-all-custom-checks.js"
+    "test:all-custom-checks": "node scripts/verify-all-custom-checks.js",
+    "backfill:normalized": "tsx scripts/backfill-normalized-bundle.ts"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.0",

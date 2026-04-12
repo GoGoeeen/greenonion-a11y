@@ -654,6 +654,7 @@ async function saveScanResults(
     score: number;
     counts: { critical: number; serious: number; moderate: number; minor: number };
     errorMessage?: string;
+    normalizedBundle?: object;
   },
 ) {
   const totalFindings = data.findings.reduce((sum, f) => sum + f.element_count, 0);
@@ -682,10 +683,23 @@ async function saveScanResults(
     ...updatePayloadBase,
     manual_checks: data.rawResult.manual_checks ?? [],
   };
+  const updatePayloadWithBundle = {
+    ...updatePayloadWithManualChecks,
+    normalized_bundle: data.normalizedBundle ?? null,
+  };
+  // Fallback-Flags: werden deaktiviert wenn die Spalte in Supabase fehlt
   let includeManualChecksColumn = true;
+  let includeNormalizedBundle = data.normalizedBundle != null;
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const payload = includeManualChecksColumn ? updatePayloadWithManualChecks : updatePayloadBase;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let payload: object;
+    if (includeNormalizedBundle && includeManualChecksColumn) {
+      payload = updatePayloadWithBundle;
+    } else if (includeManualChecksColumn) {
+      payload = updatePayloadWithManualChecks;
+    } else {
+      payload = updatePayloadBase;
+    }
     const { error: saveError } = await supabase
       .from('accessibility_scans')
       .update(payload)
@@ -693,12 +707,16 @@ async function saveScanResults(
 
     if (saveError) {
       const msg = String(saveError.message || '');
-      const missingManualChecksColumn =
-        includeManualChecksColumn &&
-        /manual_checks/i.test(msg) &&
-        /(could not find|schema cache|column)/i.test(msg);
+      const isMissingColumn = /(could not find|schema cache|column)/i.test(msg);
 
-      if (missingManualChecksColumn) {
+      if (includeNormalizedBundle && /normalized_bundle/i.test(msg) && isMissingColumn) {
+        console.warn('  Hinweis: Spalte "normalized_bundle" fehlt in accessibility_scans. Migration noch nicht ausgefuehrt. Speichere ohne normalized_bundle.');
+        includeNormalizedBundle = false;
+        attempt--;
+        continue;
+      }
+
+      if (includeManualChecksColumn && /manual_checks/i.test(msg) && isMissingColumn) {
         console.warn('  Hinweis: Spalte "manual_checks" fehlt in accessibility_scans. Speichere ohne Spalten-Update; Daten bleiben in raw_scan_result.manual_checks enthalten.');
         includeManualChecksColumn = false;
         attempt--;
@@ -919,6 +937,18 @@ async function main() {
     const timestamp = Date.now();
     const outputBaseName = `scan_${domain.replace(/[^a-z0-9.-]/gi, '_')}_${timestamp}`;
 
+    // Normalisierter Bundle — vor Save erzeugen, damit er in beide Pfade (lokal + Supabase) fliesst
+    let normalizedBundle: ReturnType<typeof normalizeScan> | null = null;
+    try {
+      normalizedBundle = normalizeScan(
+        finalScanResult as Parameters<typeof normalizeScan>[0],
+        findings,
+        mergedManualChecks as Parameters<typeof normalizeScan>[2],
+      );
+    } catch (bundleErr) {
+      console.warn(`  Warnung: Normalisierung fehlgeschlagen, Bundle wird nicht gespeichert: ${(bundleErr as Error).message}`);
+    }
+
     if (isLocal) {
       // Lokaler Modus: JSON-Datei speichern
       mkdirSync('output', { recursive: true });
@@ -938,7 +968,7 @@ async function main() {
       writeFileSync(outputPath, JSON.stringify(output, null, 2));
       console.log(`\n  Ergebnis gespeichert: ${outputPath}\n`);
     } else if (supabase && scanId) {
-      // Supabase-Modus
+      // Supabase-Modus — normalizedBundle wird mitgegeben (null = Migration noch nicht ausgefuehrt)
       await saveScanResults(supabase, scanId, {
         domain,
         pagesScanned: finalScanResult.pagesScanned,
@@ -951,25 +981,23 @@ async function main() {
         score,
         counts,
         errorMessage: warningMessage,
+        normalizedBundle: normalizedBundle ?? undefined,
       });
       console.log(`\n  Ergebnis in Supabase gespeichert (Scan ${scanId})\n`);
     }
 
-    // Normalisierter Bundle-Export (Phase A) — paralleler JSON-Export fuer Automation Layer
-    try {
-      const bundle = normalizeScan(
-        finalScanResult as Parameters<typeof normalizeScan>[0],
-        findings,
-        mergedManualChecks as Parameters<typeof normalizeScan>[2],
-      );
-      mkdirSync('output', { recursive: true });
-      const normalizedPath = `output/${outputBaseName}_normalized.json`;
-      await exportNormalizedBundle(bundle, normalizedPath);
-      console.log(`  Normalisierter Bundle gespeichert: ${normalizedPath}`);
-      console.log(`  finding_instances: ${bundle.finding_instances.length}, automation_candidates: ${bundle.automation_candidates.length}\n`);
-    } catch (bundleErr) {
-      // Bundle-Export scheitert nie den Haupt-Scan
-      console.warn(`  Warnung: Normalisierter Bundle-Export fehlgeschlagen: ${(bundleErr as Error).message}`);
+    // Normalisierter Bundle-Export (Phase B) — lokale JSON-Datei
+    if (normalizedBundle) {
+      try {
+        mkdirSync('output', { recursive: true });
+        const normalizedPath = `output/${outputBaseName}_normalized.json`;
+        await exportNormalizedBundle(normalizedBundle, normalizedPath);
+        console.log(`  Normalisierter Bundle gespeichert: ${normalizedPath}`);
+        console.log(`  finding_instances: ${normalizedBundle.finding_instances.length}, automation_candidates: ${normalizedBundle.automation_candidates.length}\n`);
+      } catch (exportErr) {
+        // Datei-Export scheitert nie den Haupt-Scan
+        console.warn(`  Warnung: Normalisierter Bundle-Export (Datei) fehlgeschlagen: ${(exportErr as Error).message}`);
+      }
     }
 
   } catch (err) {
