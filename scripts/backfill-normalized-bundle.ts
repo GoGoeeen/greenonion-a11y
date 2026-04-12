@@ -78,10 +78,17 @@ async function main(): Promise<void> {
   const { dryRun, limit } = parseBackfillArgs();
 
   const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+  const supabaseKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
-    console.error('Fehler: SUPABASE_URL und SUPABASE_SERVICE_ROLE_KEY (oder SUPABASE_KEY) muessen gesetzt sein.');
+    console.error(
+      'Fehler: SUPABASE_URL und ein Supabase-Key muessen gesetzt sein.\n' +
+      'Unterstuetzte Variablen: SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY, SUPABASE_KEY, SUPABASE_ANON_KEY',
+    );
     process.exit(1);
   }
 
