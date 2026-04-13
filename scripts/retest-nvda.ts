@@ -27,11 +27,35 @@ import {
   createErrorRetestResult,
   buildRetestReport,
 } from '../src/nvda/retest-runner.js';
+import { extractSpeechTokens }     from '../src/nvda/speech-extractor.js';
 import type {
   NormalizedScanBundle,
   AutomationCandidate,
   RetestResult,
 } from '../src/reporting/types.js';
+
+// ---------------------------------------------------------------------------
+// Konstanten
+// ---------------------------------------------------------------------------
+
+/** Wartezeit nach NVDA-Tastendruck bevor gesprochen wird (ms). */
+const NVDA_LISTEN_WAIT_MS = 1200;
+
+/**
+ * NVDA-Phrasen die auf eine Zugriffssperre / Auth-Redirect hinweisen.
+ * In diesem Fall wird das Szenario als skipped markiert statt failed.
+ */
+const AUTH_ERROR_PHRASES = [
+  'nicht berechtigt',
+  'zugriff verweigert',
+  'access denied',
+  'forbidden',
+  'anmelden',
+  'einloggen',
+  'login',
+  'you are not authorized',
+  'wp-login',
+];
 
 // ---------------------------------------------------------------------------
 // CLI-Argumente parsen
@@ -75,6 +99,35 @@ function findNormalizedFile(domain?: string, explicit?: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Token-Anreicherung aus dom_snapshot
+// ---------------------------------------------------------------------------
+
+/**
+ * Reichert einen Kandidaten mit on-the-fly berechneten expected_speech_tokens an,
+ * wenn das Array im gespeicherten Bundle leer ist.
+ *
+ * Notwendig fuer normalized.json-Dateien die vor dem speech-extractor-Fix
+ * generiert wurden — ohne Re-Scan.
+ */
+function enrichCandidate(candidate: AutomationCandidate): AutomationCandidate {
+  if (candidate.expected_speech_tokens.length > 0) return candidate;
+  if (!candidate.dom_snapshot) return candidate;
+
+  const freshTokens = extractSpeechTokens(candidate.dom_snapshot, candidate.rule_id);
+  if (freshTokens.length === 0) return candidate;
+
+  return { ...candidate, expected_speech_tokens: freshTokens };
+}
+
+/**
+ * Prueft ob die gesprochene Phrase auf eine Auth-Sperre / Redirect hinweist.
+ */
+function isAuthError(phrase: string): boolean {
+  const lower = phrase.toLowerCase();
+  return AUTH_ERROR_PHRASES.some(p => lower.includes(p));
+}
+
+// ---------------------------------------------------------------------------
 // Dry-Run-Modus (ohne echtes NVDA)
 // ---------------------------------------------------------------------------
 
@@ -111,8 +164,7 @@ async function runNvdaScenario(
       }
 
       if (step.action === 'nvda_listen') {
-        // Kurz warten bis NVDA gesprochen hat
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(NVDA_LISTEN_WAIT_MS);
         lastSpoken = await nvda.lastSpokenPhrase();
         spokenLog.push(lastSpoken);
         if (isVerbose) console.log(`  [${step.step}] nvda_listen → "${lastSpoken}"`);
@@ -130,6 +182,15 @@ async function runNvdaScenario(
 
       await nvda.perform(command);
       if (isVerbose) console.log(`  [${step.step}] ${step.action} → ${nvdaKey}`);
+    }
+
+    // Auth-Sperre erkennen: Seite nicht oeffentlich zugaenglich
+    if (isAuthError(lastSpoken)) {
+      return {
+        ...createRetestResult(candidate, lastSpoken, spokenLog, Date.now() - start),
+        status: 'skipped',
+        reason: `Seite nicht zugaenglich (Auth-Redirect erkannt): "${lastSpoken.slice(0, 80)}"`,
+      };
     }
 
     return createRetestResult(
@@ -167,33 +228,37 @@ async function main(): Promise<void> {
 
   const results: RetestResult[] = [];
 
+  // Token-Anreicherung: expected_speech_tokens on-the-fly aus dom_snapshot berechnen
+  // wenn das gespeicherte Bundle noch leere Arrays enthaelt (vor speech-extractor-Fix)
+  const enrichedCandidates = nvdaCandidates.map(enrichCandidate);
+  const enrichedCount = enrichedCandidates.filter(
+    (c, i) => c.expected_speech_tokens.length > nvdaCandidates[i].expected_speech_tokens.length,
+  ).length;
+  if (enrichedCount > 0) {
+    console.log(`Token-Anreicherung: ${enrichedCount} Kandidaten mit frischen Tokens aus dom_snapshot`);
+  }
+
   if (isDryRun) {
     // --- Dry-Run: kein Browser, kein NVDA ---
-    for (const candidate of nvdaCandidates) {
+    for (const candidate of enrichedCandidates) {
       if (isVerbose) console.log(`Szenario: ${candidate.scenario_id} (${candidate.rule_id})`);
       results.push(await runDryMode(candidate));
     }
   } else {
     // --- Echter NVDA-Retest ---
-    // Importiert lazy um den Dry-Run-Modus ohne NVDA-Voraussetzung zu ermoeglichen
-    const { nvdaTest } = await import('@guidepup/playwright');
-
     console.log('Starte Playwright-Browser...');
     const browser = await chromium.launch({ headless: false });
     const context = await browser.newContext();
     const page    = await context.newPage();
 
-    // NVDA-Fixture manuell initialisieren (ausserhalb nvdaTest-Wrapper)
-    // Hinweis: nvdaTest ist ein Playwright-Test-Wrapper. Fuer direkten NVDA-Zugriff
-    //          wird @guidepup/guidepup's nvda-Objekt verwendet.
     const { nvda } = await import('@guidepup/guidepup');
 
     console.log('Starte NVDA...');
     await nvda.start();
 
     try {
-      for (const candidate of nvdaCandidates) {
-        console.log(`Szenario ${results.length + 1}/${nvdaCandidates.length}: ${candidate.scenario_id}`);
+      for (const candidate of enrichedCandidates) {
+        console.log(`Szenario ${results.length + 1}/${enrichedCandidates.length}: ${candidate.scenario_id}`);
         if (isVerbose) console.log(`  rule_id: ${candidate.rule_id}, URL: ${candidate.page_url}`);
 
         const result = await runNvdaScenario(candidate, nvda, page);
