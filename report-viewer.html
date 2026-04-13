@@ -151,9 +151,32 @@
     .conf-low    { color: var(--sev-serious);  font-weight: 600; }
     .locator-css { font-family: monospace; font-size: 0.78rem; word-break: break-all; }
 
+    /* Retest-Status-Badges */
+    .rt-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; white-space: nowrap; cursor: default; }
+    .rt-badge.passed  { background: #c6f6d5; color: #276749; }
+    .rt-badge.failed  { background: #fed7d7; color: #9b2c2c; }
+    .rt-badge.error   { background: #feebc8; color: #7b341e; }
+    .rt-badge.skipped { background: #e2e8f0; color: #4a5568; }
+    .rt-badge.none    { background: #f7fafc; color: #a0aec0; border: 1px solid var(--go-border); }
+
+    /* Retest-Zusammenfassung */
+    .retest-summary { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; background: white; border: 1px solid var(--go-border); border-radius: 8px; margin-bottom: 16px; align-items: center; font-size: 0.85rem; }
+    .retest-summary-item { display: flex; align-items: center; gap: 6px; }
+    .retest-summary-num { font-weight: 700; font-size: 1.1rem; }
+    .retest-summary-label { color: var(--go-muted); }
+    .retest-no-data { font-size: 0.85rem; color: var(--go-muted); font-style: italic; }
+
     /* Misc */
     .fallback-note { background: #fffbeb; border: 1px solid #f6e05e; border-radius: 6px; padding: 12px 16px; font-size: 0.85rem; color: #744210; margin-bottom: 16px; }
     .empty { text-align: center; padding: 40px; color: var(--go-muted); font-size: 0.9rem; }
+
+    /* Lokale Datei laden */
+    .local-bar { background: var(--go-dark); border-bottom: 1px solid #1a4a45; padding: 10px 24px; display: flex; align-items: center; gap: 12px; }
+    .local-bar-label { font-size: 0.82rem; color: #a0aec0; }
+    .local-file-btn { padding: 6px 14px; background: var(--go-turquoise); color: var(--go-dark); border: none; border-radius: 5px; font-size: 0.82rem; font-weight: 700; cursor: pointer; }
+    .local-file-btn:hover { opacity: 0.85; }
+    #localFileInput { display: none; }
+    .local-file-name { font-size: 0.78rem; color: #68d391; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -162,6 +185,20 @@
   <span class="header-logo">GreenOnion</span>
   <span style="color:#a0aec0;font-size:0.9rem;">A11y Report</span>
   <span class="header-meta" id="headerMeta"></span>
+</div>
+<div class="local-bar">
+  <span class="local-bar-label">Lokale Datei:</span>
+  <button class="local-file-btn" onclick="document.getElementById('localFileInput').click()">
+    *_normalized.json laden
+  </button>
+  <input type="file" id="localFileInput" accept=".json">
+  <span class="local-file-name" id="localFileName"></span>
+  <span style="color:#4a5568;margin:0 4px;">|</span>
+  <button class="local-file-btn" style="background:#2d6a67;" onclick="document.getElementById('retestFileInput').click()">
+    *_retest_results.json laden
+  </button>
+  <input type="file" id="retestFileInput" accept=".json">
+  <span class="local-file-name" id="retestFileName"></span>
 </div>
 
 <div class="container">
@@ -234,6 +271,7 @@
 
     <!-- Automation -->
     <div id="tab-automation" class="tab-panel">
+      <div id="retestSummary" style="display:none;"></div>
       <div class="filter-bar">
         <span class="filter-label">SR-Relevance:</span>
         <button class="filter-btn active" data-sr="all">Alle</button>
@@ -243,12 +281,22 @@
         <button class="filter-btn" data-sr="manual_only">Manual</button>
         <button class="filter-btn" data-sr="sr_not_suitable">Not Suitable</button>
       </div>
+      <div class="filter-bar" id="retestFilterBar" style="display:none;">
+        <span class="filter-label">NVDA-Status:</span>
+        <button class="filter-btn active" data-rt="all">Alle</button>
+        <button class="filter-btn" data-rt="failed">Failed</button>
+        <button class="filter-btn" data-rt="passed">Passed</button>
+        <button class="filter-btn" data-rt="error">Error</button>
+        <button class="filter-btn" data-rt="skipped">Skipped</button>
+        <button class="filter-btn" data-rt="none">Nicht getestet</button>
+      </div>
       <div class="auto-table-wrap">
         <table>
           <thead>
             <tr>
               <th>Rule</th><th>Severity</th><th>Komponente</th>
               <th>SR-Relevance</th><th>NVDA</th><th>Retest</th>
+              <th>NVDA-Retest</th>
               <th>Confidence</th><th>Locator</th><th>Seite</th>
             </tr>
           </thead>
@@ -271,8 +319,11 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // State
 let allInstances  = [];
 let allCandidates = [];
-let activeSevFilter = 'all';
-let activeSrFilter  = 'all';
+let retestByInstanceId = {};   // { [instance_id]: RetestResult }
+let retestReport = null;        // vollstaendiger RetestReport
+let activeSevFilter  = 'all';
+let activeSrFilter   = 'all';
+let activeRtFilter   = 'all';  // Retest-Status-Filter
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -325,12 +376,22 @@ document.querySelectorAll('.filter-btn[data-sev]').forEach(function(btn) {
   });
 });
 
-// --- Filter-Buttons Automation ---
+// --- Filter-Buttons Automation (SR-Relevance) ---
 document.querySelectorAll('.filter-btn[data-sr]').forEach(function(btn) {
   btn.addEventListener('click', function() {
     document.querySelectorAll('.filter-btn[data-sr]').forEach(function(b) { b.classList.remove('active'); });
     btn.classList.add('active');
     activeSrFilter = btn.dataset.sr;
+    renderAutomation(allCandidates);
+  });
+});
+
+// --- Filter-Buttons Automation (Retest-Status) ---
+document.querySelectorAll('.filter-btn[data-rt]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.filter-btn[data-rt]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeRtFilter = btn.dataset.rt;
     renderAutomation(allCandidates);
   });
 });
@@ -401,10 +462,10 @@ function renderWcagAreas(areas) {
     const li   = document.createElement('li');
     const sc   = document.createElement('span');
     sc.className = 'wcag-sc';
-    sc.textContent = String(a.wcag_area || '');
+    sc.textContent = String(a.wcag_sc || a.wcag_area || '');
     const cnt  = document.createElement('span');
     cnt.className = 'wcag-count';
-    cnt.textContent = (a.finding_count || 0) + ' Findings';
+    cnt.textContent = (a.instance_count || a.finding_count || 0) + ' Findings';
     li.append(sc, cnt);
     list.appendChild(li);
   });
@@ -568,12 +629,104 @@ function renderRemediation(instances) {
   });
 }
 
+// --- Retest-Zusammenfassung rendern ---
+function renderRetestSummary(report) {
+  var summaryEl = el('retestSummary');
+  if (!report) { summaryEl.style.display = 'none'; return; }
+
+  summaryEl.textContent = '';
+  summaryEl.style.display = '';
+
+  var div = document.createElement('div');
+  div.className = 'retest-summary';
+
+  var runnerLabel = document.createElement('span');
+  runnerLabel.style.cssText = 'font-size:0.8rem;color:var(--go-muted);margin-right:4px;';
+  runnerLabel.textContent = 'NVDA-Retest (' + (report.runner || '?') + '):';
+  div.appendChild(runnerLabel);
+
+  var items = [
+    { n: report.total_candidates, label: 'Gesamt',   color: 'var(--go-dark)' },
+    { n: report.failed,           label: 'Failed',   color: 'var(--sev-critical)' },
+    { n: report.passed,           label: 'Passed',   color: 'var(--sev-minor)' },
+    { n: report.errors,           label: 'Errors',   color: 'var(--sev-serious)' },
+    { n: report.skipped,          label: 'Skipped',  color: 'var(--go-muted)' },
+  ];
+  items.forEach(function(item) {
+    var wrap = document.createElement('div');
+    wrap.className = 'retest-summary-item';
+    var num = document.createElement('span');
+    num.className = 'retest-summary-num';
+    num.style.color = item.color;
+    num.textContent = String(item.n);
+    var lbl = document.createElement('span');
+    lbl.className = 'retest-summary-label';
+    lbl.textContent = item.label;
+    wrap.append(num, lbl);
+    div.appendChild(wrap);
+  });
+
+  var dateSpan = document.createElement('span');
+  dateSpan.style.cssText = 'margin-left:auto;font-size:0.78rem;color:var(--go-muted);';
+  dateSpan.textContent = report.generated_at
+    ? new Date(report.generated_at).toLocaleString('de-AT')
+    : '';
+  div.appendChild(dateSpan);
+
+  summaryEl.appendChild(div);
+}
+
+// --- Retest-Status-Badge erstellen ---
+function makeRetestBadge(result) {
+  var badge = document.createElement('span');
+  if (!result) {
+    badge.className = 'rt-badge none';
+    badge.textContent = '—';
+    return badge;
+  }
+  var statusLabels = { passed: 'Passed ✓', failed: 'Failed ✗', error: 'Error', skipped: 'Skipped' };
+  badge.className = 'rt-badge ' + (result.status || 'none');
+  badge.textContent = statusLabels[result.status] || result.status || '—';
+  // Reason als Tooltip (kurz gekuerzt)
+  if (result.reason) {
+    badge.title = result.reason.length > 120
+      ? result.reason.slice(0, 117) + '...'
+      : result.reason;
+  }
+  return badge;
+}
+
+// --- Retest-Daten laden und State aktualisieren ---
+function applyRetestReport(report) {
+  retestReport = report;
+  retestByInstanceId = {};
+  if (report && Array.isArray(report.results)) {
+    report.results.forEach(function(r) {
+      retestByInstanceId[r.instance_id] = r;
+    });
+  }
+  renderRetestSummary(retestReport);
+  el('retestFilterBar').style.display = retestReport ? '' : 'none';
+  renderAutomation(allCandidates);
+}
+
 // --- Automation (DOM-API) ---
 function renderAutomation(candidates) {
   var tbody  = el('autoTableBody');
   var emptyEl = el('autoEmpty');
-  var filter = activeSrFilter;
-  var filtered = filter === 'all' ? candidates : candidates.filter(function(c) { return c.sr_relevance === filter; });
+
+  // SR-Relevance-Filter
+  var srFilter = activeSrFilter;
+  var filtered = srFilter === 'all' ? candidates : candidates.filter(function(c) { return c.sr_relevance === srFilter; });
+
+  // Retest-Status-Filter (nur wenn Retest-Daten vorhanden)
+  if (activeRtFilter !== 'all' && retestReport) {
+    filtered = filtered.filter(function(c) {
+      var rt = retestByInstanceId[c.instance_id];
+      var status = rt ? rt.status : 'none';
+      return status === activeRtFilter;
+    });
+  }
 
   tbody.textContent = '';
 
@@ -611,6 +764,10 @@ function renderAutomation(candidates) {
     srBadge.className = 'sr-badge ' + (c.sr_relevance || '');
     srBadge.textContent = c.sr_relevance || '—';
 
+    // Retest-Badge fuer diesen Kandidaten
+    var rtResult = retestByInstanceId[c.instance_id] || null;
+    var rtBadge = makeRetestBadge(rtResult);
+
     tr.append(
       td(ruleCode),
       td(sevPill),
@@ -618,6 +775,7 @@ function renderAutomation(candidates) {
       td(srBadge),
       td(c.nvda_candidate ? '✓' : '—', c.nvda_candidate ? 'nvda-yes' : 'nvda-no'),
       td(retestLabels[c.retest_strategy] || c.retest_strategy || '—'),
+      td(rtBadge),
       td(c.confidence || '—', 'conf-' + (c.confidence || '')),
       td(loc, 'locator-css'),
       td(pageShort),
@@ -641,7 +799,7 @@ async function loadReport() {
   try {
     var query = sb
       .from('accessibility_scans')
-      .select('id,domain,scan_date,scanned_at,status,error_message,score,total_findings,critical_count,serious_count,moderate_count,minor_count,pages_scanned,normalized_bundle,raw_scan_result')
+      .select('id,domain,scan_date,scanned_at,status,error_message,score,total_findings,critical_count,serious_count,moderate_count,minor_count,pages_scanned,normalized_bundle,raw_scan_result,retest_results')
       .order('scanned_at', { ascending: false })
       .limit(1);
 
@@ -675,7 +833,9 @@ async function loadReport() {
       setText('tabBadgeRem',  allInstances.length);
       setText('tabBadgeAuto', allCandidates.length);
       renderRemediation(allInstances);
-      renderAutomation(allCandidates);
+      // Retest-Daten aus Supabase wenn vorhanden
+      if (data.retest_results) applyRetestReport(data.retest_results);
+      else renderAutomation(allCandidates);
     } else {
       renderExecutiveFallback(data);
       setText('tabBadgeRem',  data.total_findings ?? '?');
@@ -717,6 +877,91 @@ async function loadReport() {
 }
 
 loadReport();
+
+// --- Lokale Retest-Datei laden ---
+el('retestFileInput').addEventListener('change', function(event) {
+  var file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  el('retestFileName').textContent = file.name;
+  var reader = new FileReader();
+
+  reader.onload = function(e) {
+    try {
+      var report = JSON.parse(e.target.result);
+
+      // Validierung: muss ein RetestReport sein
+      if (!Array.isArray(report.results) || report.total_candidates === undefined) {
+        showState('Ungültige Datei — kein RetestReport-Format (results[] fehlt).', true);
+        return;
+      }
+
+      applyRetestReport(report);
+
+      // Retest-Tab aktivieren wenn noch nicht aktiv
+      var autoTab = document.querySelector('.tab-btn[data-tab="automation"]');
+      if (autoTab && !autoTab.classList.contains('active')) {
+        autoTab.click();
+      }
+
+    } catch(err) {
+      showState('JSON-Fehler: ' + (err.message || err), true);
+    }
+  };
+
+  reader.readAsText(file);
+});
+
+// --- Lokale Datei laden ---
+el('localFileInput').addEventListener('change', function(event) {
+  var file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  el('localFileName').textContent = file.name;
+  var reader = new FileReader();
+
+  reader.onload = function(e) {
+    try {
+      var bundle = JSON.parse(e.target.result);
+
+      // Validierung: muss ein NormalizedScanBundle sein
+      if (!bundle.finding_instances || !bundle.automation_candidates) {
+        showState('Ungültige Datei — kein normalized_bundle Format (finding_instances fehlt).', true);
+        return;
+      }
+
+      // Scan-Bar aus meta befüllen
+      var meta = bundle.meta || {};
+      var ex   = bundle.executive_summary || {};
+      setText('barDomain', meta.domain || '—');
+      setText('barDate', meta.scan_date ? new Date(meta.scan_date).toLocaleString('de-AT') : '—');
+      setText('barPages', ex.pages_scanned ?? '—');
+      var statusEl = el('barStatus');
+      statusEl.textContent = 'completed (lokal)';
+      statusEl.className   = 'status-badge completed';
+      setText('headerMeta', meta.domain || file.name);
+
+      showApp();
+
+      allInstances  = bundle.finding_instances  || [];
+      allCandidates = bundle.automation_candidates || [];
+
+      // Retest-State zuruecksetzen beim Laden einer neuen normalized.json
+      applyRetestReport(null);
+
+      renderExecutiveNormalized(bundle);
+      setText('tabBadgeRem',  allInstances.length);
+      setText('tabBadgeAuto', allCandidates.length);
+      renderRemediation(allInstances);
+      renderAutomation(allCandidates);
+
+    } catch(err) {
+      showState('JSON-Fehler: ' + (err.message || err), true);
+    }
+  };
+
+  reader.readAsText(file);
+});
 </script>
 </body>
 </html>

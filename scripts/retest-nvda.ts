@@ -6,6 +6,8 @@
  * fuehrt die action_sequence via @guidepup/playwright + echtes NVDA aus
  * und schreibt das Ergebnis als *_retest_results.json.
  *
+ * Optional: mit --scan-id werden die Ergebnisse auch in Supabase gespeichert.
+ *
  * Voraussetzungen:
  *   - Windows 10/11 mit installiertem NVDA (guidepup erwartet NVDA im Pfad)
  *   - guidepup-Setup einmalig ausgefuehrt: npx @guidepup/setup
@@ -14,7 +16,8 @@
  * Aufruf:
  *   npm run retest:nvda [-- --file output/scan_example_normalized.json]
  *   npm run retest:nvda [-- --domain example.com]
- *   npm run retest:nvda [-- --dry-run]  (ohne echtes NVDA, Ergebnisse werden gemockt)
+ *   npm run retest:nvda [-- --scan-id <uuid>]  (speichert auch in Supabase)
+ *   npm run retest:nvda [-- --dry-run]          (ohne echtes NVDA)
  */
 
 import * as fs   from 'node:fs';
@@ -32,6 +35,7 @@ import type {
   NormalizedScanBundle,
   AutomationCandidate,
   RetestResult,
+  RetestReport,
 } from '../src/reporting/types.js';
 
 // ---------------------------------------------------------------------------
@@ -64,11 +68,13 @@ const AUTH_ERROR_PHRASES = [
 const args = process.argv.slice(2);
 const fileArgIdx    = args.indexOf('--file');
 const domainArgIdx  = args.indexOf('--domain');
+const scanIdArgIdx  = args.indexOf('--scan-id');
 const isDryRun      = args.includes('--dry-run');
 const isVerbose     = args.includes('--verbose');
 
-const explicitFile  = fileArgIdx  >= 0 ? args[fileArgIdx  + 1] : undefined;
+const explicitFile   = fileArgIdx   >= 0 ? args[fileArgIdx   + 1] : undefined;
 const explicitDomain = domainArgIdx >= 0 ? args[domainArgIdx + 1] : undefined;
+const explicitScanId = scanIdArgIdx >= 0 ? args[scanIdArgIdx + 1] : undefined;
 
 // ---------------------------------------------------------------------------
 // Eingabedatei ermitteln
@@ -329,6 +335,11 @@ async function main(): Promise<void> {
   const outputBase = sourceFile.replace('_normalized.json', '_retest_results.json');
   fs.writeFileSync(outputBase, JSON.stringify(report, null, 2), 'utf-8');
 
+  // --- Optional: Supabase-Speicherung ---
+  if (explicitScanId) {
+    await saveRetestToSupabase(explicitScanId, report);
+  }
+
   // --- Zusammenfassung ---
   console.log('');
   console.log('=== NVDA-Retest-Ergebnisse ===');
@@ -338,6 +349,56 @@ async function main(): Promise<void> {
   console.log(`Skipped:   ${report.skipped}`);
   console.log(`Fehler:    ${report.errors}`);
   console.log(`Output:    ${outputBase}`);
+  if (explicitScanId) console.log(`Supabase:  scan_id ${explicitScanId} aktualisiert`);
+}
+
+// ---------------------------------------------------------------------------
+// Supabase-Speicherung
+// ---------------------------------------------------------------------------
+
+/**
+ * Speichert den RetestReport in der Spalte `retest_results` eines Scan-Records.
+ *
+ * Liest SUPABASE_URL und SUPABASE_SERVICE_KEY aus der .env-Datei.
+ * Schlaegt fehl ohne den NVDA-Retest zu unterbrechen (nur Warnung).
+ */
+async function saveRetestToSupabase(scanId: string, report: RetestReport): Promise<void> {
+  try {
+    // .env laden (dotenv ist im Projekt bereits verfuegbar via scan.ts)
+    const envPath = path.resolve('.env');
+    if (fs.existsSync(envPath)) {
+      const envContent = fs.readFileSync(envPath, 'utf-8');
+      for (const line of envContent.split('\n')) {
+        const [key, ...rest] = line.split('=');
+        if (key && rest.length && !process.env[key.trim()]) {
+          process.env[key.trim()] = rest.join('=').trim().replace(/^["']|["']$/g, '');
+        }
+      }
+    }
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const serviceKey  = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !serviceKey) {
+      console.warn('Supabase-Speicherung uebersprungen: SUPABASE_URL oder SUPABASE_SERVICE_KEY fehlt.');
+      return;
+    }
+
+    // Dynamischer Import — vermeidet Fehler wenn @supabase/supabase-js nicht installiert
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(supabaseUrl, serviceKey);
+
+    const { error } = await sb
+      .from('accessibility_scans')
+      .update({ retest_results: report })
+      .eq('id', scanId);
+
+    if (error) {
+      console.warn(`Supabase-Update fehlgeschlagen: ${error.message}`);
+    }
+  } catch (err) {
+    console.warn(`Supabase-Speicherung fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 main().catch(err => {

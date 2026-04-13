@@ -39,7 +39,12 @@ const SR_RULE_MAP: Readonly<Record<string, SrRuleEntry>> = {
   'aria-label': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
   'aria-labelledby': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
   'aria-command-name': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
-  'orphaned-label': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
+  'orphaned-label': {
+    sr_relevance: 'sr_direct',
+    retest_strategy: 'manual',
+    confidence: 'medium',
+    manual_review_reason: 'Orphaned-Label-Locator zeigt auf nicht-interaktives Element (h4/h5/p) — NVDA-Fokus nicht moeglich. Manuell pruefen ob korrespondierendes Input fehlt.',
+  },
   'empty-heading': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
   'role-img-alt': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
   'object-alt': { sr_relevance: 'sr_direct', retest_strategy: 'nvda_voice_assert', confidence: 'high' },
@@ -171,7 +176,9 @@ export function classifySrRelevance(ruleId: string, engine?: string): SrClassifi
   }
 
   const base = SR_RULE_MAP[ruleId] ?? DEFAULT_CLASSIFICATION;
-  const nvda_candidate = base.sr_relevance === 'sr_direct';
+  // nvda_candidate: sr_direct ABER nicht wenn retest_strategy 'manual' ist
+  // (z.B. orphaned-label: Locator zeigt auf nicht-interaktives Element)
+  const nvda_candidate = base.sr_relevance === 'sr_direct' && base.retest_strategy !== 'manual';
 
   return { ...base, nvda_candidate };
 }
