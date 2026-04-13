@@ -139,8 +139,37 @@ async function runDryMode(candidate: AutomationCandidate): Promise<RetestResult>
 }
 
 // ---------------------------------------------------------------------------
-// Echter NVDA-Retest via @guidepup/playwright
+// Echter NVDA-Retest via direktem Locator-Fokus
 // ---------------------------------------------------------------------------
+
+/**
+ * Fokussiert ein Element via Playwright-Locator.
+ * Versucht zuerst locator_primary, dann locator_fallbacks.
+ * Gibt true zurueck wenn ein Locator erfolgreich war.
+ */
+async function focusElement(
+  candidate: AutomationCandidate,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  page: any,
+): Promise<boolean> {
+  const allLocators = [candidate.locator_primary, ...candidate.locator_fallbacks];
+
+  for (const loc of allLocators) {
+    try {
+      if (loc.type === 'css') {
+        await page.locator(loc.value).first().focus({ timeout: 5_000 });
+        return true;
+      }
+      if (loc.type === 'xpath') {
+        await page.locator(`xpath=${loc.value}`).first().focus({ timeout: 5_000 });
+        return true;
+      }
+    } catch {
+      // Naechsten Locator versuchen
+    }
+  }
+  return false;
+}
 
 async function runNvdaScenario(
   candidate: AutomationCandidate,
@@ -150,41 +179,36 @@ async function runNvdaScenario(
   page: any,
 ): Promise<RetestResult> {
   const start = Date.now();
-  const spokenLog: string[] = [];
-  let lastSpoken = '';
 
   try {
-    for (const step of candidate.action_sequence) {
-      const nvdaKey = ACTION_TO_NVDA_COMMAND[step.action];
+    // 1. Seite laden
+    await page.goto(candidate.page_url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
-      if (step.action === 'open_page') {
-        await page.goto(candidate.page_url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-        if (isVerbose) console.log(`  [${step.step}] open_page → ${candidate.page_url}`);
-        continue;
-      }
+    // 2. NVDA-Log leeren — verhindert Akkumulation aus vorherigen Szenarien
+    await nvda.clearSpokenPhraseLog();
 
-      if (step.action === 'nvda_listen') {
-        await page.waitForTimeout(NVDA_LISTEN_WAIT_MS);
-        lastSpoken = await nvda.lastSpokenPhrase();
-        spokenLog.push(lastSpoken);
-        if (isVerbose) console.log(`  [${step.step}] nvda_listen → "${lastSpoken}"`);
-        continue;
-      }
-
-      if (!nvdaKey || nvdaKey.startsWith('__')) continue;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const command = (NVDAKeyCodeCommands as any)[nvdaKey];
-      if (!command) {
-        console.warn(`  [WARN] Unbekannter NVDA-Command: ${nvdaKey} (action: ${step.action})`);
-        continue;
-      }
-
-      await nvda.perform(command);
-      if (isVerbose) console.log(`  [${step.step}] ${step.action} → ${nvdaKey}`);
+    // 3. Spezifisches Element fokussieren (praeziser als sequentielle K/Tab-Navigation)
+    const focused = await focusElement(candidate, page);
+    if (!focused) {
+      return createErrorRetestResult(
+        candidate,
+        'Element nicht fokussierbar — alle Locators fehlgeschlagen',
+        Date.now() - start,
+      );
     }
 
-    // Auth-Sperre erkennen: Seite nicht oeffentlich zugaenglich
+    // 4. NVDA: aktuelles Fokus-Element vorlesen lassen (Insert+Tab)
+    await nvda.perform(NVDAKeyCodeCommands.reportCurrentFocus);
+    await page.waitForTimeout(NVDA_LISTEN_WAIT_MS);
+
+    // 5. Spoken-Log seit clearSpokenPhraseLog lesen
+    const rawLog: string[] = await nvda.spokenPhraseLog();
+    const spokenLog = rawLog.filter(p => p.trim().length > 0);
+    const lastSpoken = spokenLog.join('. ');
+
+    if (isVerbose) console.log(`  spoken: "${lastSpoken}"`);
+
+    // 6. Auth-Sperre erkennen
     if (isAuthError(lastSpoken)) {
       return {
         ...createRetestResult(candidate, lastSpoken, spokenLog, Date.now() - start),
@@ -193,12 +217,8 @@ async function runNvdaScenario(
       };
     }
 
-    return createRetestResult(
-      candidate,
-      lastSpoken,
-      spokenLog,
-      Date.now() - start,
-    );
+    return createRetestResult(candidate, lastSpoken, spokenLog, Date.now() - start);
+
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return createErrorRetestResult(candidate, msg, Date.now() - start);
