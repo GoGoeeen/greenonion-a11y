@@ -325,7 +325,15 @@ let activeSevFilter  = 'all';
 let activeSrFilter   = 'all';
 let activeRtFilter   = 'all';  // Retest-Status-Filter
 
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Supabase-Client — optional (null wenn CDN nicht geladen oder offline)
+let sb = null;
+try {
+  if (window.supabase) {
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  }
+} catch(e) {
+  console.warn('Supabase nicht verfuegbar (CDN-Fehler):', e);
+}
 
 // --- DOM-Helfer ---
 function el(id) { return document.getElementById(id); }
@@ -792,7 +800,12 @@ async function loadReport() {
   var clientId = params.get('clientId');
 
   if (!scanId && !clientId) {
-    showState('Kein scanId oder clientId in URL angegeben. Beispiel: ?scanId=UUID', true);
+    showState('Lokalen Scan laden: Schaltflächen oben verwenden. Für Supabase: ?scanId=UUID in URL.', false);
+    return;
+  }
+
+  if (!sb) {
+    showState('Supabase nicht verfügbar — bitte Datei lokal laden (Schaltfläche oben).', false);
     return;
   }
 
