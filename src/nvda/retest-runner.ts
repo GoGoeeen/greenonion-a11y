@@ -48,11 +48,40 @@ export const ACTION_TO_NVDA_COMMAND: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 /**
+ * NVDA-Strukturwoerter die reine Rollen-/Zustandsmeldungen ohne Inhalt repraesentieren.
+ *
+ * Wenn spoken_phrase ausschliesslich diese Woerter enthaelt, hat das Element
+ * keinen zugaenglichen Namen — NVDA kann nur Rolle und Zustand vorlesen.
+ * Das ist fuer link-name / button-name / image-alt ein verifizierter Bug.
+ */
+const NVDA_STRUCTURAL_WORDS = new Set([
+  // Rollen (Deutsch)
+  'link', 'button', 'schaltfläche', 'bild', 'grafik', 'eingabe', 'kontrollkästchen',
+  'auswahlfeld', 'kombinationsfeld', 'listenfeld', 'option', 'element',
+  // Zustände (Deutsch)
+  'fokussiert', 'verlinkt', 'unsichtbar', 'schreibgeschützt', 'schreibgeschuetzt',
+  'besucht', 'ausgeklappt', 'eingeklappt', 'deaktiviert', 'aktiviert', 'markiert',
+  // Rollen (Englisch — NVDA kann auch englisch sein)
+  'focused', 'visited', 'expanded', 'collapsed', 'disabled', 'checked',
+  'graphic', 'image', 'edit', 'checkbox', 'radio', 'button',
+]);
+
+/**
+ * Prueft ob die gesprochene Phrase ausschliesslich aus NVDA-Strukturwoertern besteht
+ * (Rolle + Zustand, kein zugaenglicher Name vorhanden).
+ */
+function isOnlyStructuralWords(phrase: string): boolean {
+  const words = phrase.toLowerCase().split(/[\s,./;:!?]+/).filter(w => w.length > 0);
+  return words.length > 0 && words.every(w => NVDA_STRUCTURAL_WORDS.has(w));
+}
+
+/**
  * Prueft ob die gesprochene Phrase die erwarteten Tokens enthaelt.
  *
  * Strategie:
  *   - expected_speech_tokens leer → skipped (kein Baseline vorhanden)
  *   - Mindestens ein Token als Substring in spoken_phrase (case-insensitive) → passed
+ *   - Nur Strukturwoerter (Rolle/Zustand) → failed mit "Bug verifiziert"-Meldung
  *   - Kein Token gefunden → failed
  *
  * @param spokenPhrase   Tatsaechlich gesprochene Phrase
@@ -86,6 +115,15 @@ export function evaluateSpeechTokens(
     return {
       status: 'passed',
       reason: `Gefundene Tokens: ${matchedTokens.join(', ')}`,
+    };
+  }
+
+  // Strukturwoerter-Erkennung: NVDA spricht nur Rolle/Zustand, kein Name vorhanden.
+  // Das ist ein verifizierter Accessibility-Bug — keine "falschen" Tokens erwartet.
+  if (isOnlyStructuralWords(spoken)) {
+    return {
+      status: 'failed',
+      reason: `NVDA bestaetigt: kein zugaenglicher Name — nur Rolle/Zustand gesprochen: "${spokenPhrase}". Bug verifiziert.`,
     };
   }
 

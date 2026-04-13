@@ -101,6 +101,27 @@ describe('evaluateSpeechTokens', () => {
     const r = evaluateSpeechTokens('button, Schliessen', ['Oeffnen', 'Starten']);
     assert.equal(r.status, 'failed');
   });
+
+  it('failed mit Bug-Meldung wenn NVDA nur Strukturwoerter spricht (link-name ohne Name)', () => {
+    const r = evaluateSpeechTokens('Link, fokussiert, verlinkt', ['greenonion.at/en', 'Asset-11-8']);
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /kein zugaenglicher Name/);
+    assert.match(r.reason, /Bug verifiziert/);
+  });
+
+  it('failed mit Bug-Meldung bei "Link, fokussiert, verlinkt, unsichtbar"', () => {
+    const r = evaluateSpeechTokens('Link, fokussiert, verlinkt, unsichtbar', ['greenonion.at/it']);
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /Bug verifiziert/);
+  });
+
+  it('normaler failed wenn spoken Inhalt enthaelt aber Token nicht passt', () => {
+    // Phrase hat Inhalt "Startseite" aber Token "Homepage" passt nicht
+    const r = evaluateSpeechTokens('Link, Startseite, fokussiert', ['Homepage']);
+    assert.equal(r.status, 'failed');
+    // Soll NICHT als "nur Strukturwoerter" behandelt werden
+    assert.doesNotMatch(r.reason, /Bug verifiziert/);
+  });
 });
 
 // ---------------------------------------------------------------------------

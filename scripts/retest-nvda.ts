@@ -127,6 +127,18 @@ function isAuthError(phrase: string): boolean {
   return AUTH_ERROR_PHRASES.some(p => lower.includes(p));
 }
 
+/**
+ * Prueft ob NVDA den Fokus auf das Gesamtdokument meldet statt auf ein konkretes Element.
+ *
+ * Erkennungsmuster: "dokument" + "fokussiert" in der gesprochenen Phrase.
+ * Tritt auf wenn ein nicht-interaktives Element (h4/h5/p/div) fokussiert wird —
+ * Playwright setzt den Fokus, aber NVDA berichtet den Dokument-Kontext.
+ */
+function isDocumentFocus(phrase: string): boolean {
+  const lower = phrase.toLowerCase();
+  return lower.includes('dokument') && lower.includes('fokussiert');
+}
+
 // ---------------------------------------------------------------------------
 // Dry-Run-Modus (ohne echtes NVDA)
 // ---------------------------------------------------------------------------
@@ -215,6 +227,18 @@ async function runNvdaScenario(
         status: 'skipped',
         reason: `Seite nicht zugaenglich (Auth-Redirect erkannt): "${lastSpoken.slice(0, 80)}"`,
       };
+    }
+
+    // 7. Dokument-Fokus erkennen: NVDA meldet das Gesamtdokument statt des Elements.
+    //    Tritt auf wenn der Locator auf ein nicht-interaktives Element zeigt (h4/h5/p/div),
+    //    das Playwright fokussieren kann, NVDA aber als Dokument-Kontext behandelt.
+    //    → Status 'error' statt 'failed' um irrerefuehrende Fehlerausgabe zu vermeiden.
+    if (isDocumentFocus(lastSpoken)) {
+      return createErrorRetestResult(
+        candidate,
+        `NVDA-Fokus auf Dokument statt Element — nicht-interaktives Element kann nicht fokussiert werden. Locator: ${candidate.locator_primary.value}`,
+        Date.now() - start,
+      );
     }
 
     return createRetestResult(candidate, lastSpoken, spokenLog, Date.now() - start);
