@@ -15,6 +15,7 @@ import { buildLocators } from './locator-builder.js';
 import { classifyPageType } from './page-classifier.js';
 import { classifyComponentType } from './component-classifier.js';
 import { classifySrRelevance } from './sr-classifier.js';
+import { buildNvdaScenario, canBuildScenario } from '../nvda/scenario-builder.js';
 import type {
   NormalizedScanBundle,
   FindingInstance,
@@ -248,6 +249,8 @@ function normalizeManualCheckToInstances(
 /**
  * Baut AutomationCandidates aus FindingInstances.
  * Schliesst sr_not_suitable und manual_only aus.
+ * Phase D: befuellt preconditions, action_sequence, expected_role_state,
+ *          expected_speech_tokens, expected_navigation_outcome per Heuristik.
  */
 function buildAutomationCandidates(instances: FindingInstance[]): AutomationCandidate[] {
   const candidates: AutomationCandidate[] = [];
@@ -257,6 +260,20 @@ function buildAutomationCandidates(instances: FindingInstance[]): AutomationCand
     if (sc.sr_relevance === 'sr_not_suitable' || sc.sr_relevance === 'manual_only') {
       continue;
     }
+
+    // Phase D: NVDA-Szenario heuristisch befuellen (sr_direct + sr_indirect)
+    const scenario = canBuildScenario(sc.sr_relevance)
+      ? buildNvdaScenario(
+          {
+            rule_id: inst.rule_id,
+            sr_relevance: sc.sr_relevance,
+            page_type: inst.page_type,
+            component_type: inst.component_type,
+          },
+          inst.page_url,
+          inst.html_snippet,
+        )
+      : null;
 
     candidates.push({
       finding_id: inst.finding_id,
@@ -274,12 +291,12 @@ function buildAutomationCandidates(instances: FindingInstance[]): AutomationCand
       locator_primary: inst.locator_primary,
       locator_fallbacks: inst.locator_fallbacks,
       dom_snapshot: inst.dom_snapshot,
-      // Phase D/E: leer in Phase A
-      preconditions: [],
-      action_sequence: [],
-      expected_role_state: [],
-      expected_speech_tokens: [],
-      expected_navigation_outcome: undefined,
+      // Phase D: heuristisch befuellt fuer sr_direct/sr_indirect; leer fuer needs_flow_context
+      preconditions:              scenario?.preconditions          ?? [],
+      action_sequence:            scenario?.action_sequence        ?? [],
+      expected_role_state:        scenario?.expected_role_state    ?? [],
+      expected_speech_tokens:     scenario?.expected_speech_tokens ?? [],
+      expected_navigation_outcome: scenario?.expected_navigation_outcome,
       manual_review_reason: inst.manual_review_reason,
       confidence: inst.confidence,
       retest_strategy: sc.retest_strategy,

@@ -474,9 +474,11 @@ describe('normalizeScan', () => {
     const labelCandidate = bundle.automation_candidates.find(c => c.rule_id === 'label');
     assert.ok(labelCandidate, 'label-Kandidat fehlt in automation_candidates');
     assert.equal(labelCandidate.nvda_candidate, true);
-    assert.equal(labelCandidate.preconditions.length, 0, 'Phase A: preconditions muss leer sein');
-    assert.equal(labelCandidate.action_sequence.length, 0, 'Phase A: action_sequence muss leer sein');
-    assert.equal(labelCandidate.expected_speech_tokens.length, 0, 'Phase A: expected_speech_tokens muss leer sein');
+    // Phase D: preconditions, action_sequence, expected_speech_tokens werden heuristisch befuellt
+    assert.ok(Array.isArray(labelCandidate.preconditions), 'preconditions ist Array');
+    assert.ok(Array.isArray(labelCandidate.action_sequence), 'action_sequence ist Array');
+    assert.ok(Array.isArray(labelCandidate.expected_speech_tokens), 'expected_speech_tokens ist Array');
+    assert.ok(labelCandidate.preconditions.includes('page_loaded'), 'Phase D: page_loaded in preconditions');
   });
 
   test('executive_summary ist plausibel', () => {
