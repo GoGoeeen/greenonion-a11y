@@ -10,8 +10,11 @@
  *   6. placeholder (fuer Inputs, als Fallback wenn kein Label)
  *   7. value (fuer Buttons vom Typ submit/reset)
  *
- * Alle extrahierten Tokens sind heuristisch (Phase D).
- * Phase E befuellt diese Felder aus aufgezeichneten NVDA-Baselines.
+ * Fuer Regeln die auf fehlendes Accessible-Name prufen (link-name, image-alt etc.)
+ * werden zusaetzliche Fallback-Tokens aus href/src extrahiert — NVDA liest bei
+ * fehlendem Namen teils die URL oder den Dateinamen vor.
+ *
+ * Alle extrahierten Tokens sind heuristisch (Phase D/E).
  */
 
 /** Extrahiert den Wert eines HTML-Attributs aus einem Snippet. */
@@ -43,6 +46,33 @@ function extractVisibleText(html: string, maxLength = 80): string | null {
   const text = stripHtml(html);
   if (!text || text.length < 2) return null;
   return text.substring(0, maxLength);
+}
+
+/**
+ * Normiert eine URL auf einen kurzen, erkennbaren Token.
+ * "https://greenonion.at/en/ueber-uns/" → "greenonion.at/en/ueber-uns"
+ */
+function urlToToken(url: string): string | null {
+  if (!url || url.startsWith('#') || url.startsWith('javascript')) return null;
+  return url
+    .replace(/^https?:\/\//, '')  // Protokoll entfernen
+    .replace(/\/$/, '')            // Trailing Slash entfernen
+    .trim() || null;
+}
+
+/**
+ * Extrahiert den Dateinamen aus einem src-Pfad.
+ * "https://example.com/uploads/logo-800x200.webp" → "logo-800x200.webp"
+ * Stripped auch Groessen-Suffixe: "logo-800x200" → "logo"
+ */
+function srcToFilenameToken(src: string): string | null {
+  if (!src) return null;
+  const filename = src.split('/').pop()?.split('?')[0] ?? '';
+  if (!filename || filename.length < 3) return null;
+  // Groessen-Suffix entfernen: logo-1024x193.webp → logo, logo-300x57 → logo
+  const withoutExt = filename.replace(/\.[^.]+$/, '');           // .webp/.png entfernen
+  const withoutSize = withoutExt.replace(/-\d+x\d+(-\d+x\d+)?$/, ''); // -800x200 entfernen
+  return withoutSize.length >= 3 ? withoutSize : withoutExt;
 }
 
 /**
@@ -91,8 +121,61 @@ export function extractSpeechTokens(html: string, ruleId?: string): string[] {
   const placeholder = extractAttr(html, 'placeholder');
   if (placeholder && !tokens.length) tokens.push(placeholder);
 
+  // 7. Regel-spezifische Fallbacks fuer fehlendes Accessible-Name
+  //    NVDA liest bei fehlendem Namen teils die URL oder den Dateinamen.
+  //    Diese Tokens markieren den IST-Zustand (kaputt), nicht den SOLL-Zustand.
+  if (tokens.length === 0) {
+    tokens.push(...extractFallbackTokens(html, ruleId));
+  }
+
   // Duplikate entfernen, leere Strings filtern
   return [...new Set(tokens.filter(t => t.trim().length > 0))];
+}
+
+/**
+ * Fallback-Tokens fuer Regeln die auf fehlendes Accessible-Name prufen.
+ *
+ * Wird nur aufgerufen wenn kein anderer Token gefunden wurde.
+ * Extrahiert href-URL oder Bild-Dateiname als NVDA-Fallback-Ausgabe.
+ */
+function extractFallbackTokens(html: string, ruleId?: string): string[] {
+  const fallbacks: string[] = [];
+
+  // link-name: NVDA liest bei unnamed Links die href-URL vor
+  if (ruleId === 'link-name' || ruleId === 'link-in-text-block') {
+    const href = extractAttr(html, 'href');
+    const hrefToken = urlToToken(href ?? '');
+    if (hrefToken) fallbacks.push(hrefToken);
+
+    // Bild-src als zusaetzlicher Fallback (falls Link nur ein Bild enthaelt)
+    const src = extractAttr(html, 'src');
+    const srcToken = srcToFilenameToken(src ?? '');
+    if (srcToken && !fallbacks.some(t => t.includes(srcToken))) {
+      fallbacks.push(srcToken);
+    }
+  }
+
+  // image-alt / role-img-alt / svg-img-alt / input-image-alt:
+  // NVDA liest Dateiname des Bildes wenn kein alt-Text vorhanden
+  if (
+    ruleId === 'image-alt' ||
+    ruleId === 'image-redundant-alt' ||
+    ruleId === 'role-img-alt' ||
+    ruleId === 'svg-img-alt' ||
+    ruleId === 'input-image-alt'
+  ) {
+    const src = extractAttr(html, 'src');
+    const srcToken = srcToFilenameToken(src ?? '');
+    if (srcToken) fallbacks.push(srcToken);
+  }
+
+  // button-name: href oder Kontext-Text als Fallback
+  if (ruleId === 'button-name' || ruleId === 'input-button-name') {
+    const value = extractAttr(html, 'value');
+    if (value) fallbacks.push(value);
+  }
+
+  return fallbacks;
 }
 
 /**

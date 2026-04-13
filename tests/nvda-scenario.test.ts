@@ -116,6 +116,47 @@ describe('extractSpeechTokens', () => {
     const tokens = extractSpeechTokens('<input type="submit" value="Anmelden">');
     assert.ok(tokens.includes('Anmelden'), 'Submit-Button value extrahiert');
   });
+
+  // Fallback-Tokens fuer link-name (Phase E)
+  it('extrahiert href als Fallback fuer link-name wenn kein Text vorhanden', () => {
+    const html = '<a href="https://greenonion.at/en/"><img alt="" src="logo.webp"></a>';
+    const tokens = extractSpeechTokens(html, 'link-name');
+    assert.ok(tokens.length > 0, 'Mindestens ein Fallback-Token erwartet');
+    assert.ok(tokens.some(t => t.includes('greenonion.at')), 'href-URL als Fallback-Token');
+  });
+
+  it('extrahiert img-Dateiname als Fallback fuer link-name', () => {
+    const html = '<a href="https://example.com/en/"><img alt="" src="https://example.com/uploads/Asset-logo.webp"></a>';
+    const tokens = extractSpeechTokens(html, 'link-name');
+    assert.ok(tokens.some(t => t.includes('Asset-logo') || t.includes('example.com')),
+      'src-Dateiname oder href als Fallback');
+  });
+
+  it('stripped Groessen-Suffix aus img-Dateinamen', () => {
+    const html = '<a href="https://example.com/"><img alt="" src="logo-1024x193.webp"></a>';
+    const tokens = extractSpeechTokens(html, 'link-name');
+    const srcToken = tokens.find(t => t.includes('logo'));
+    assert.ok(srcToken, 'Dateiname-Token erwartet');
+    assert.ok(!srcToken?.includes('1024'), 'Groessen-Suffix sollte entfernt sein');
+  });
+
+  it('extrahiert src-Dateiname als Fallback fuer image-alt', () => {
+    const html = '<img src="https://example.com/assets/hero-banner.png" alt="">';
+    const tokens = extractSpeechTokens(html, 'image-alt');
+    assert.ok(tokens.some(t => t.includes('hero-banner')), 'src-Dateiname als Fallback');
+  });
+
+  it('gibt keine Fallback-Tokens wenn kein href und kein src vorhanden', () => {
+    const html = '<a></a>';
+    const tokens = extractSpeechTokens(html, 'link-name');
+    assert.deepStrictEqual(tokens, [], 'Kein Token fuer leeren Link ohne href');
+  });
+
+  it('bevorzugt vorhandenen alt-Text vor Fallback', () => {
+    const html = '<a href="https://greenonion.at/en/"><img alt="GreenOnion Logo" src="logo.webp"></a>';
+    const tokens = extractSpeechTokens(html, 'link-name');
+    assert.ok(tokens[0] === 'GreenOnion Logo', 'alt-Text hat Vorrang vor href-Fallback');
+  });
 });
 
 // ===== extractNavigationOutcome =====
