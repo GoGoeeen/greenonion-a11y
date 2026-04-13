@@ -168,3 +168,60 @@ export interface NormalizedScanBundle {
   finding_instances: FindingInstance[];
   automation_candidates: AutomationCandidate[];
 }
+
+// ---------------------------------------------------------------------------
+// Phase E — NVDA-Retest-Ergebnisse
+// ---------------------------------------------------------------------------
+
+/** Status eines einzelnen Retest-Laufs. */
+export type RetestStatus = 'passed' | 'failed' | 'skipped' | 'error';
+
+/**
+ * Ergebnis eines einzelnen NVDA-Szenario-Retests.
+ *
+ * Phase E: Wird fuer jeden AutomationCandidate mit nvda_candidate: true erzeugt.
+ */
+export interface RetestResult {
+  instance_id: string;
+  scenario_id: string;
+  rule_id: string;
+  page_url: string;
+  sr_relevance: SrRelevance;
+  retest_strategy: RetestStrategy;
+
+  /** Erwartete Tokens aus Phase D (kann leer sein = skipped). */
+  expected_speech_tokens: string[];
+  /** Tatsaechlich von NVDA/Virtual-SR gesprochene Phrase. */
+  spoken_phrase: string;
+  /** Komplettes Spoken-Log (alle Phasen der action_sequence). */
+  spoken_log: string[];
+
+  status: RetestStatus;
+  /** Erklaerung warum passed/failed/skipped. */
+  reason: string;
+
+  /** Zeitstempel des Retest-Laufs (ISO 8601). */
+  tested_at: string;
+  /** Dauer des Szenarios in Millisekunden. */
+  duration_ms: number;
+}
+
+/**
+ * Gesamtbericht eines NVDA-Retest-Laufs.
+ *
+ * Wird als output/*_retest_results.json gespeichert.
+ */
+export interface RetestReport {
+  generated_at: string;
+  source_file: string;
+  domain: string;
+  runner: 'nvda' | 'virtual-screen-reader';
+
+  total_candidates: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+
+  results: RetestResult[];
+}

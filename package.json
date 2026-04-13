@@ -14,7 +14,10 @@
     "test:normalize": "node --import tsx/esm --test tests/normalize-scan.test.ts",
     "test:custom-checks": "node scripts/verify-custom-checks.js",
     "test:all-custom-checks": "node scripts/verify-all-custom-checks.js",
-    "backfill:normalized": "tsx scripts/backfill-normalized-bundle.ts"
+    "backfill:normalized": "tsx scripts/backfill-normalized-bundle.ts",
+    "retest:nvda": "tsx scripts/retest-nvda.ts",
+    "retest:nvda:dry": "tsx scripts/retest-nvda.ts -- --dry-run",
+    "test:retest": "node --import tsx/esm --test tests/retest-nvda.test.ts"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.0",
@@ -27,6 +30,10 @@
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
+    "@guidepup/playwright": "^0.15.0",
+    "@guidepup/virtual-screen-reader": "^0.32.1",
+    "@types/jsdom": "^28.0.1",
+    "jsdom": "^29.0.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

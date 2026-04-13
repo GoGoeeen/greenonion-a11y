@@ -1,0 +1,237 @@
+/**
+ * NVDA-Retest-CLI (Phase E).
+ *
+ * Liest einen normalisierten Scan-Bundle (*_normalized.json),
+ * filtert automation_candidates mit nvda_candidate: true,
+ * fuehrt die action_sequence via @guidepup/playwright + echtes NVDA aus
+ * und schreibt das Ergebnis als *_retest_results.json.
+ *
+ * Voraussetzungen:
+ *   - Windows 10/11 mit installiertem NVDA (guidepup erwartet NVDA im Pfad)
+ *   - guidepup-Setup einmalig ausgefuehrt: npx @guidepup/setup
+ *   - Playwright-Browser installiert: npx playwright install chromium
+ *
+ * Aufruf:
+ *   npm run retest:nvda [-- --file output/scan_example_normalized.json]
+ *   npm run retest:nvda [-- --domain example.com]
+ *   npm run retest:nvda [-- --dry-run]  (ohne echtes NVDA, Ergebnisse werden gemockt)
+ */
+
+import * as fs   from 'node:fs';
+import * as path from 'node:path';
+import { chromium }                from 'playwright';
+import { NVDAKeyCodeCommands }     from '@guidepup/guidepup';
+import {
+  ACTION_TO_NVDA_COMMAND,
+  createRetestResult,
+  createErrorRetestResult,
+  buildRetestReport,
+} from '../src/nvda/retest-runner.js';
+import type {
+  NormalizedScanBundle,
+  AutomationCandidate,
+  RetestResult,
+} from '../src/reporting/types.js';
+
+// ---------------------------------------------------------------------------
+// CLI-Argumente parsen
+// ---------------------------------------------------------------------------
+
+const args = process.argv.slice(2);
+const fileArgIdx    = args.indexOf('--file');
+const domainArgIdx  = args.indexOf('--domain');
+const isDryRun      = args.includes('--dry-run');
+const isVerbose     = args.includes('--verbose');
+
+const explicitFile  = fileArgIdx  >= 0 ? args[fileArgIdx  + 1] : undefined;
+const explicitDomain = domainArgIdx >= 0 ? args[domainArgIdx + 1] : undefined;
+
+// ---------------------------------------------------------------------------
+// Eingabedatei ermitteln
+// ---------------------------------------------------------------------------
+
+function findNormalizedFile(domain?: string, explicit?: string): string {
+  if (explicit) {
+    if (!fs.existsSync(explicit)) throw new Error(`Datei nicht gefunden: ${explicit}`);
+    return explicit;
+  }
+
+  const outputDir = path.resolve('output');
+  const files = fs.readdirSync(outputDir)
+    .filter(f => f.endsWith('_normalized.json'))
+    .filter(f => !domain || f.includes(domain))
+    .map(f => ({ file: f, mtime: fs.statSync(path.join(outputDir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+
+  if (files.length === 0) {
+    throw new Error(
+      domain
+        ? `Kein *_normalized.json fuer Domain "${domain}" in output/ gefunden.`
+        : 'Kein *_normalized.json in output/ gefunden. Erst "npm run scan" ausfuehren.',
+    );
+  }
+
+  return path.join(outputDir, files[0].file);
+}
+
+// ---------------------------------------------------------------------------
+// Dry-Run-Modus (ohne echtes NVDA)
+// ---------------------------------------------------------------------------
+
+async function runDryMode(candidate: AutomationCandidate): Promise<RetestResult> {
+  const start = Date.now();
+  // Simuliert: "kein NVDA vorhanden" → spoken = ""
+  const result = createRetestResult(candidate, '', [], Date.now() - start);
+  return { ...result, reason: `[DRY-RUN] ${result.reason}` };
+}
+
+// ---------------------------------------------------------------------------
+// Echter NVDA-Retest via @guidepup/playwright
+// ---------------------------------------------------------------------------
+
+async function runNvdaScenario(
+  candidate: AutomationCandidate,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  nvda: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  page: any,
+): Promise<RetestResult> {
+  const start = Date.now();
+  const spokenLog: string[] = [];
+  let lastSpoken = '';
+
+  try {
+    for (const step of candidate.action_sequence) {
+      const nvdaKey = ACTION_TO_NVDA_COMMAND[step.action];
+
+      if (step.action === 'open_page') {
+        await page.goto(candidate.page_url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        if (isVerbose) console.log(`  [${step.step}] open_page → ${candidate.page_url}`);
+        continue;
+      }
+
+      if (step.action === 'nvda_listen') {
+        // Kurz warten bis NVDA gesprochen hat
+        await page.waitForTimeout(500);
+        lastSpoken = await nvda.lastSpokenPhrase();
+        spokenLog.push(lastSpoken);
+        if (isVerbose) console.log(`  [${step.step}] nvda_listen → "${lastSpoken}"`);
+        continue;
+      }
+
+      if (!nvdaKey || nvdaKey.startsWith('__')) continue;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const command = (NVDAKeyCodeCommands as any)[nvdaKey];
+      if (!command) {
+        console.warn(`  [WARN] Unbekannter NVDA-Command: ${nvdaKey} (action: ${step.action})`);
+        continue;
+      }
+
+      await nvda.perform(command);
+      if (isVerbose) console.log(`  [${step.step}] ${step.action} → ${nvdaKey}`);
+    }
+
+    return createRetestResult(
+      candidate,
+      lastSpoken,
+      spokenLog,
+      Date.now() - start,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return createErrorRetestResult(candidate, msg, Date.now() - start);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Haupt-Logik
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  // --- Eingabedatei laden ---
+  const sourceFile = findNormalizedFile(explicitDomain, explicitFile);
+  const bundle: NormalizedScanBundle = JSON.parse(fs.readFileSync(sourceFile, 'utf-8'));
+
+  const nvdaCandidates = bundle.automation_candidates.filter(c => c.nvda_candidate);
+
+  console.log(`Quelldatei:       ${sourceFile}`);
+  console.log(`NVDA-Kandidaten:  ${nvdaCandidates.length} / ${bundle.automation_candidates.length}`);
+  console.log(`Modus:            ${isDryRun ? 'DRY-RUN (kein echtes NVDA)' : 'NVDA (Echtbetrieb)'}`);
+  console.log('');
+
+  if (nvdaCandidates.length === 0) {
+    console.log('Keine NVDA-Kandidaten vorhanden. Abbruch.');
+    process.exit(0);
+  }
+
+  const results: RetestResult[] = [];
+
+  if (isDryRun) {
+    // --- Dry-Run: kein Browser, kein NVDA ---
+    for (const candidate of nvdaCandidates) {
+      if (isVerbose) console.log(`Szenario: ${candidate.scenario_id} (${candidate.rule_id})`);
+      results.push(await runDryMode(candidate));
+    }
+  } else {
+    // --- Echter NVDA-Retest ---
+    // Importiert lazy um den Dry-Run-Modus ohne NVDA-Voraussetzung zu ermoeglichen
+    const { nvdaTest } = await import('@guidepup/playwright');
+
+    console.log('Starte Playwright-Browser...');
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext();
+    const page    = await context.newPage();
+
+    // NVDA-Fixture manuell initialisieren (ausserhalb nvdaTest-Wrapper)
+    // Hinweis: nvdaTest ist ein Playwright-Test-Wrapper. Fuer direkten NVDA-Zugriff
+    //          wird @guidepup/guidepup's nvda-Objekt verwendet.
+    const { nvda } = await import('@guidepup/guidepup');
+
+    console.log('Starte NVDA...');
+    await nvda.start();
+
+    try {
+      for (const candidate of nvdaCandidates) {
+        console.log(`Szenario ${results.length + 1}/${nvdaCandidates.length}: ${candidate.scenario_id}`);
+        if (isVerbose) console.log(`  rule_id: ${candidate.rule_id}, URL: ${candidate.page_url}`);
+
+        const result = await runNvdaScenario(candidate, nvda, page);
+        results.push(result);
+
+        const icon = result.status === 'passed' ? '✓' : result.status === 'skipped' ? '—' : '✗';
+        console.log(`  ${icon} ${result.status.toUpperCase()}: ${result.reason}`);
+      }
+    } finally {
+      console.log('\nNVDA wird beendet...');
+      await nvda.stop();
+      await browser.close();
+    }
+  }
+
+  // --- Ergebnis-Report schreiben ---
+  const report = buildRetestReport(
+    results,
+    sourceFile,
+    bundle.meta.domain,
+    isDryRun ? 'virtual-screen-reader' : 'nvda',
+  );
+
+  const outputBase = sourceFile.replace('_normalized.json', '_retest_results.json');
+  fs.writeFileSync(outputBase, JSON.stringify(report, null, 2), 'utf-8');
+
+  // --- Zusammenfassung ---
+  console.log('');
+  console.log('=== NVDA-Retest-Ergebnisse ===');
+  console.log(`Gesamt:    ${report.total_candidates}`);
+  console.log(`Passed:    ${report.passed}`);
+  console.log(`Failed:    ${report.failed}`);
+  console.log(`Skipped:   ${report.skipped}`);
+  console.log(`Fehler:    ${report.errors}`);
+  console.log(`Output:    ${outputBase}`);
+}
+
+main().catch(err => {
+  console.error('Fehler beim NVDA-Retest:', err);
+  process.exit(1);
+});
