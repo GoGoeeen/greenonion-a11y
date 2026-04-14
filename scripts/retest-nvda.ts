@@ -336,8 +336,10 @@ async function main(): Promise<void> {
   fs.writeFileSync(outputBase, JSON.stringify(report, null, 2), 'utf-8');
 
   // --- Optional: Supabase-Speicherung ---
-  if (explicitScanId) {
-    await saveRetestToSupabase(explicitScanId, report);
+  // Prioritaet: --scan-id CLI-Argument > meta.scan_id aus Bundle
+  const resolvedScanId = explicitScanId ?? bundle.meta.scan_id;
+  if (resolvedScanId) {
+    await saveRetestToSupabase(resolvedScanId, report);
   }
 
   // --- Zusammenfassung ---
@@ -349,7 +351,10 @@ async function main(): Promise<void> {
   console.log(`Skipped:   ${report.skipped}`);
   console.log(`Fehler:    ${report.errors}`);
   console.log(`Output:    ${outputBase}`);
-  if (explicitScanId) console.log(`Supabase:  scan_id ${explicitScanId} aktualisiert`);
+  if (resolvedScanId) {
+    const source = explicitScanId ? '--scan-id' : 'bundle.meta.scan_id';
+    console.log(`Supabase:  scan_id ${resolvedScanId} aktualisiert (Quelle: ${source})`);
+  }
 }
 
 // ---------------------------------------------------------------------------

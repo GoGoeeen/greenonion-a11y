@@ -314,10 +314,16 @@ function buildAutomationCandidates(instances: FindingInstance[]): AutomationCand
  * 2. Incomplete-Checks (needs_review) als ai_suspected
  * 3. Manual-Check-Nodes
  */
+export interface NormalizeScanOptions {
+  /** Supabase-Scan-ID — wird in meta.scan_id eingebettet fuer automatische Retest-Speicherung. */
+  scanId?: string;
+}
+
 export function normalizeScan(
   rawScanResult: RawScanInput,
   findings: FindingInput[],
   manualChecks: ManualCheckInput[],
+  options: NormalizeScanOptions = {},
 ): NormalizedScanBundle {
   const domain = (() => {
     try {
@@ -391,6 +397,7 @@ export function normalizeScan(
       scan_date: rawScanResult.scannedAt ?? new Date().toISOString(),
       mode: rawScanResult.mode ?? 'public',
       bundle_version: '1.0-alpha',
+      ...(options.scanId ? { scan_id: options.scanId } : {}),
     },
     executive_summary: executiveSummary,
     finding_instances: instances,

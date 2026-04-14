@@ -154,6 +154,12 @@ export interface NormalizedScanBundleMeta {
   mode: string;
   /** Phase A — paralleler Export, UI-Layer folgt in Phase C */
   bundle_version: '1.0-alpha';
+  /**
+   * Supabase-Scan-ID (UUID) des zugehoerigen accessibility_scans-Eintrags.
+   * Wird beim Scan via scripts/scan.ts befuellt (nicht im --local-Modus).
+   * Ermoeglicht retest-nvda.ts automatisch den richtigen Datensatz zu aktualisieren.
+   */
+  scan_id?: string;
 }
 
 /**

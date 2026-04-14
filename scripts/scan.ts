@@ -944,6 +944,7 @@ async function main() {
         finalScanResult as Parameters<typeof normalizeScan>[0],
         findings,
         mergedManualChecks as Parameters<typeof normalizeScan>[2],
+        { scanId: scanId ?? undefined },
       );
     } catch (bundleErr) {
       console.warn(`  Warnung: Normalisierung fehlgeschlagen, Bundle wird nicht gespeichert: ${(bundleErr as Error).message}`);
