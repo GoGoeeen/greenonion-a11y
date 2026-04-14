@@ -16,35 +16,41 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    const { clientId, domain, max_pages } = await req.json()
+    const { clientId, domain, max_pages, scan_type, scan_id } = await req.json()
 
     if (!clientId || !domain) {
       throw new Error('Missing clientId or domain')
     }
 
-    // Insert scan request
-    const { data, error } = await supabase
-      .from('accessibility_scans')
-      .insert({
-        client_id: clientId,
-        domain: domain,
-        status: 'pending',
-        scanned_at: new Date().toISOString(),
-        max_pages: max_pages || 10,
-        results: {}
-      })
-      .select('id')
-      .single()
+    let scanId: string
 
-    if (error) throw error
+    if (scan_id) {
+      // Aufrufer hat bereits einen Eintrag erstellt (z.B. trigger-full-scan/route.ts)
+      // — keinen zweiten anlegen, nur den vorhandenen verwenden.
+      scanId = scan_id
+    } else {
+      // Scan-Eintrag anlegen — DB-Trigger (on-scan-inserted) startet danach GitHub Actions
+      const { data, error } = await supabase
+        .from('accessibility_scans')
+        .insert({
+          client_id: clientId,
+          domain: domain,
+          status: 'pending',
+          max_pages: max_pages || 10,
+          scan_type: scan_type || 'full',
+        })
+        .select('id')
+        .single()
 
-    // GitHub Action wird automatisch vom DB-Trigger (on_scan_inserted) gestartet
+      if (error) throw error
+      scanId = data.id
+    }
 
     return new Response(
       JSON.stringify({
         success: true,
-        version: "v3-db-trigger",
-        scanId: data.id,
+        version: "v4-scan-type",
+        scanId,
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
