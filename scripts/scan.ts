@@ -26,6 +26,12 @@ import {
 import { writeFileSync, mkdirSync } from 'fs';
 import { normalizeScan } from '../src/normalize/normalize-scan.js';
 import { exportNormalizedBundle } from '../src/reporting/export-json.js';
+import {
+  assertBundleReadyForPersistence,
+  isBundleRequiredForScan,
+  verifyPersistedNormalizedBundle,
+} from '../src/reporting/normalized-bundle-persistence.js';
+import type { NormalizedScanBundle } from '../src/reporting/types.js';
 
 // --- Types ---
 
@@ -583,6 +589,15 @@ function countSeverities(findings: Finding[]) {
   return { critical, serious, moderate, minor };
 }
 
+function buildOutputBaseName(domain: string, scanId?: string) {
+  const safeDomain = domain.replace(/[^a-z0-9.-]/gi, '_');
+  const safeScanId = String(scanId || '').trim();
+  if (safeScanId) {
+    return `scan_${safeDomain}_${safeScanId}`;
+  }
+  return `scan_${safeDomain}_${Date.now()}`;
+}
+
 // --- Supabase Update Helpers ---
 
 async function updatePagesScanned(supabase: SupabaseClient, scanId: string, pagesScanned: number) {
@@ -654,9 +669,16 @@ async function saveScanResults(
     score: number;
     counts: { critical: number; serious: number; moderate: number; minor: number };
     errorMessage?: string;
-    normalizedBundle?: object;
+    normalizedBundle?: NormalizedScanBundle;
+    requireNormalizedBundle?: boolean;
   },
 ) {
+  if (data.requireNormalizedBundle && !data.normalizedBundle) {
+    throw new Error(
+      `Supabase save aborted: normalized_bundle ist fuer Full-Scan ${scanId} erforderlich, wurde aber nicht erzeugt.`,
+    );
+  }
+
   const totalFindings = data.findings.reduce((sum, f) => sum + f.element_count, 0);
   const expectedRawJsonLength = JSON.stringify(data.rawResult).length;
   const expectedPages = data.rawResult.pages?.length ?? 0;
@@ -710,6 +732,13 @@ async function saveScanResults(
       const isMissingColumn = /(could not find|schema cache|column)/i.test(msg);
 
       if (includeNormalizedBundle && /normalized_bundle/i.test(msg) && isMissingColumn) {
+        if (data.requireNormalizedBundle) {
+          throw new Error(
+            'Supabase save failed: Spalte "normalized_bundle" fehlt, ' +
+            'obwohl der Scan ohne persistiertes Bundle nicht abgeschlossen werden darf. ' +
+            'Migration 20260412120000_add_normalized_bundle.sql fehlt oder ist nicht angewendet.',
+          );
+        }
         console.warn('  Hinweis: Spalte "normalized_bundle" fehlt in accessibility_scans. Migration noch nicht ausgefuehrt. Speichere ohne normalized_bundle.');
         includeNormalizedBundle = false;
         attempt--;
@@ -728,7 +757,7 @@ async function saveScanResults(
 
     const { data: verifyRows, error: verifyError } = await supabase
       .from('accessibility_scans')
-      .select('raw_scan_result')
+      .select('raw_scan_result, normalized_bundle')
       .eq('id', scanId);
 
     if (verifyError) {
@@ -751,7 +780,7 @@ async function saveScanResults(
     const verifyRow = verifyRows?.[0];
     const persisted = verifyRow?.raw_scan_result as RawScanResult | null;
     if (!persisted || typeof persisted !== 'object') {
-      if (attempt === 2) {
+      if (attempt === 3) {
         throw new Error('Supabase verify failed: raw_scan_result missing after save');
       }
       continue;
@@ -767,14 +796,34 @@ async function saveScanResults(
       persistedRawJsonLength >= expectedRawJsonLength;
 
     if (isValid) {
-      return;
+      const bundleVerification = verifyPersistedNormalizedBundle(
+        data.normalizedBundle,
+        verifyRow?.normalized_bundle,
+      );
+
+      if (bundleVerification.ok) {
+        return;
+      }
+
+      if (attempt === 3) {
+        throw new Error(`Supabase verify failed: ${bundleVerification.reason}`);
+      }
+
+      console.warn(`  Warnung: Supabase verify meldet Problem mit normalized_bundle, neuer Versuch: ${bundleVerification.reason}`);
+      continue;
     }
 
-    if (attempt === 2) {
+    if (attempt === 3) {
       throw new Error(
         `Supabase verify failed: raw_scan_result mismatch (expected len=${expectedRawJsonLength}, pages=${expectedPages}, issues=${expectedIssues}; got len=${persistedRawJsonLength}, pages=${persistedPages}, issues=${String(persistedIssues)})`,
       );
     }
+
+    console.warn(
+      `  Warnung: Supabase verify meldet unvollstaendiges raw_scan_result, neuer Versuch ` +
+      `(expected len=${expectedRawJsonLength}, pages=${expectedPages}, issues=${expectedIssues}; ` +
+      `got len=${persistedRawJsonLength}, pages=${persistedPages}, issues=${String(persistedIssues)})`,
+    );
   }
 }
 
@@ -934,8 +983,7 @@ async function main() {
     console.log(`  Score: ${score}/100`);
     console.log(`  Critical: ${counts.critical}, Serious: ${counts.serious}, Moderate: ${counts.moderate}, Minor: ${counts.minor}`);
 
-    const timestamp = Date.now();
-    const outputBaseName = `scan_${domain.replace(/[^a-z0-9.-]/gi, '_')}_${timestamp}`;
+    const outputBaseName = buildOutputBaseName(domain, scanId);
 
     // Normalisierter Bundle — vor Save erzeugen, damit er in beide Pfade (lokal + Supabase) fliesst
     let normalizedBundle: ReturnType<typeof normalizeScan> | null = null;
@@ -948,6 +996,45 @@ async function main() {
       );
     } catch (bundleErr) {
       console.warn(`  Warnung: Normalisierung fehlgeschlagen, Bundle wird nicht gespeichert: ${(bundleErr as Error).message}`);
+    }
+
+    // Normalisierten Bundle sofort lokal exportieren — auch im Supabase-Modus.
+    // So bleibt immer eine greifbare *_normalized.json auf Disk, selbst wenn
+    // ein spaeterer Supabase- oder Verify-Schritt scheitert.
+    if (normalizedBundle) {
+      try {
+        mkdirSync('output', { recursive: true });
+        const normalizedPath = `output/${outputBaseName}_normalized.json`;
+        await exportNormalizedBundle(normalizedBundle, normalizedPath);
+        console.log(`  Normalisierter Bundle lokal gespeichert: ${normalizedPath}`);
+        console.log(`  finding_instances: ${normalizedBundle.finding_instances.length}, automation_candidates: ${normalizedBundle.automation_candidates.length}`);
+      } catch (exportErr) {
+        console.warn(`  Warnung: Normalisierter Bundle-Export (Datei) fehlgeschlagen: ${(exportErr as Error).message}`);
+      }
+    }
+
+    const rawResultForSave = {
+      ...finalScanResult,
+      manual_checks: finalScanResult.manual_checks ?? [],
+    };
+    const requireNormalizedBundle = isBundleRequiredForScan({
+      isLocal,
+      scanType,
+      rawResult: rawResultForSave,
+    });
+
+    assertBundleReadyForPersistence(normalizedBundle, {
+      isLocal,
+      scanType,
+      rawResult: rawResultForSave,
+      scanId: scanId ?? undefined,
+    });
+
+    if (!isLocal) {
+      console.log(
+        `  Bundle-Persistenz: ${requireNormalizedBundle ? 'erforderlich' : 'optional'}, ` +
+        `bundle erzeugt: ${normalizedBundle ? 'ja' : 'nein'}`,
+      );
     }
 
     if (isLocal) {
@@ -969,36 +1056,20 @@ async function main() {
       writeFileSync(outputPath, JSON.stringify(output, null, 2));
       console.log(`\n  Ergebnis gespeichert: ${outputPath}\n`);
     } else if (supabase && scanId) {
-      // Supabase-Modus — normalizedBundle wird mitgegeben (null = Migration noch nicht ausgefuehrt)
+      // Supabase-Modus — normalizedBundle wird mitgegeben und verifiziert.
       await saveScanResults(supabase, scanId, {
         domain,
         pagesScanned: finalScanResult.pagesScanned,
         pagesScannedUrls,
         findings,
-        rawResult: {
-          ...finalScanResult,
-          manual_checks: finalScanResult.manual_checks ?? [],
-        },
+        rawResult: rawResultForSave,
         score,
         counts,
         errorMessage: warningMessage,
         normalizedBundle: normalizedBundle ?? undefined,
+        requireNormalizedBundle,
       });
       console.log(`\n  Ergebnis in Supabase gespeichert (Scan ${scanId})\n`);
-    }
-
-    // Normalisierter Bundle-Export (Phase B) — lokale JSON-Datei
-    if (normalizedBundle) {
-      try {
-        mkdirSync('output', { recursive: true });
-        const normalizedPath = `output/${outputBaseName}_normalized.json`;
-        await exportNormalizedBundle(normalizedBundle, normalizedPath);
-        console.log(`  Normalisierter Bundle gespeichert: ${normalizedPath}`);
-        console.log(`  finding_instances: ${normalizedBundle.finding_instances.length}, automation_candidates: ${normalizedBundle.automation_candidates.length}\n`);
-      } catch (exportErr) {
-        // Datei-Export scheitert nie den Haupt-Scan
-        console.warn(`  Warnung: Normalisierter Bundle-Export (Datei) fehlgeschlagen: ${(exportErr as Error).message}`);
-      }
     }
 
   } catch (err) {
