@@ -23,11 +23,18 @@ Deno.serve(async (req) => {
     }
 
     let scanId: string
+    let shareToken: string | null = null
 
     if (scan_id) {
       // Aufrufer hat bereits einen Eintrag erstellt (z.B. trigger-full-scan/route.ts)
       // — keinen zweiten anlegen, nur den vorhandenen verwenden.
       scanId = scan_id
+      const { data: existing } = await supabase
+        .from('accessibility_scans')
+        .select('share_token')
+        .eq('id', scan_id)
+        .single()
+      shareToken = existing?.share_token ?? null
     } else {
       // Scan-Eintrag anlegen — DB-Trigger (on-scan-inserted) startet danach GitHub Actions
       const { data, error } = await supabase
@@ -39,18 +46,23 @@ Deno.serve(async (req) => {
           max_pages: max_pages || 10,
           scan_type: scan_type || 'full',
         })
-        .select('id')
+        .select('id, share_token')
         .single()
 
       if (error) throw error
       scanId = data.id
+      shareToken = data.share_token
     }
 
     return new Response(
       JSON.stringify({
         success: true,
-        version: "v4-scan-type",
+        version: "v5-share-token",
         scanId,
+        shareToken,
+        shareLink: shareToken
+          ? `https://gogoeeen.github.io/greenonion-a11y/report-viewer.html?token=${shareToken}`
+          : null,
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

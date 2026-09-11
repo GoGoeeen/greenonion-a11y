@@ -796,11 +796,12 @@ function renderAutomation(candidates) {
 // --- Haupt-Laderoutine ---
 async function loadReport() {
   var params   = new URLSearchParams(window.location.search);
+  var token    = params.get('token');
   var scanId   = params.get('scanId');
   var clientId = params.get('clientId');
 
-  if (!scanId && !clientId) {
-    showState('Lokalen Scan laden: Schaltflächen oben verwenden. Für Supabase: ?scanId=UUID in URL.', false);
+  if (!token && !scanId && !clientId) {
+    showState('Lokalen Scan laden: Schaltflächen oben verwenden. Für Supabase: ?token=SHARETOKEN in URL.', false);
     return;
   }
 
@@ -816,15 +817,16 @@ async function loadReport() {
       .order('scanned_at', { ascending: false })
       .limit(1);
 
-    if (scanId)   query = query.eq('id', scanId);
-    if (clientId) query = query.eq('client_id', clientId);
+    if (token)         query = query.eq('share_token', token);
+    else if (scanId)   query = query.eq('id', scanId);
+    else if (clientId) query = query.eq('client_id', clientId);
 
     var result = await query.maybeSingle();
     var data   = result.data;
     var error  = result.error;
 
     if (error) throw new Error(error.message);
-    if (!data) { showState('Kein Scan für diese ID gefunden.', true); return; }
+    if (!data) { showState(token ? 'Dieser Report-Link ist ungültig oder abgelaufen.' : 'Kein Scan für diese ID gefunden.', true); return; }
 
     // Scan-Bar
     setText('barDomain', data.domain || '—');
