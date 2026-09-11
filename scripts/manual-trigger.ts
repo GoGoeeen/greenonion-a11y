@@ -53,11 +53,15 @@ async function triggerScan() {
         }),
     });
 
-    const data = await response.json() as { success?: boolean; scanId?: string; error?: string };
+    const data = await response.json() as { success?: boolean; scanId?: string; shareLink?: string; error?: string };
 
     if (response.ok && data.success) {
         console.log(`✅ Scan gestartet (scan_id: ${data.scanId})`);
         console.log(`   Status prüfen: https://flow.greenonion.services`);
+        if (data?.shareLink) {
+          console.log('\n🔗 Kunden-Link:');
+          console.log('   ' + data.shareLink);
+        }
     } else {
         console.error(`❌ Trigger fehlgeschlagen (${response.status}):`, data.error ?? JSON.stringify(data));
     }
