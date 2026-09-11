@@ -187,9 +187,9 @@ function saveState(statePath, state) {
 // Zusammenfassung als CSV schreiben
 // ---------------------------------------------------------------------------
 function writeSummary(summaryPath, results) {
-  const header = 'Firma;Website;Score;Verstoesse;Status';
+  const header = 'Firma;Website;Score;Verstoesse;Status;ShareLink';
   const lines = results.map(r =>
-    `${r.name};${r.website};${r.score ?? ''};${r.violations ?? ''};${r.status}`
+    `${r.name};${r.website};${r.score ?? ''};${r.violations ?? ''};${r.status};${r.shareLink ?? ''}`
   );
   writeFileSync(summaryPath, [header, ...lines].join('\n'), 'utf-8');
 }
@@ -574,12 +574,38 @@ Beispiel:
         ? scanResult.pages.reduce((sum, p) => sum + (p.violations?.length || 0), 0)
         : 0;
 
+      // Supabase INSERT → share_token wird automatisch generiert
+      let shareLink = '';
+      if (supabase) {
+        try {
+          const { data: inserted, error: insertErr } = await supabase
+            .from('accessibility_scans')
+            .insert({
+              domain: company.website,
+              status: 'completed',
+              score: scanResult.score ?? null,
+              total_findings: totalViolations,
+              pages_scanned: scanResult.pages?.length ?? 0,
+              raw_scan_result: scanResult,
+            })
+            .select('share_token')
+            .single();
+          if (!insertErr && inserted?.share_token) {
+            shareLink = `https://gogoeeen.github.io/greenonion-a11y/report-viewer.html?token=${inserted.share_token}`;
+            console.log(`    🔗 Share-Link: ${shareLink}`);
+          }
+        } catch (sbErr) {
+          console.log(`    ⚠ Supabase-Speicherung fehlgeschlagen: ${sbErr.message}`);
+        }
+      }
+
       const summaryEntry = {
         name: company.name,
         website: company.website,
         score: scanResult.score ?? '',
         violations: totalViolations,
         status: 'OK',
+        shareLink,
       };
 
       state.completed[stateKey] = summaryEntry;
